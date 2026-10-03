@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Pharmacy Ledger: a ledger book with a pharmacy cross. 108dp adaptive canvas, content inside the 66dp safe zone. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- page -->
+    <path android:fillColor="#FFFFFF"
+        android:pathData="M41,31h24a4,4 0 0 1 4,4v38a4,4 0 0 1 -4,4h-24a4,4 0 0 1 -4,-4v-38a4,4 0 0 1 4,-4z" />
+    <!-- spine -->
+    <path android:fillColor="#CFE8DF"
+        android:pathData="M41,31h3v46h-3a4,4 0 0 1 -4,-4v-38a4,4 0 0 1 4,-4z" />
+    <!-- pharmacy cross -->
+    <path android:fillColor="#1B7F5C"
+        android:pathData="M54.5,38h5v5h5v5h-5v5h-5v-5h-5v-5h5z" />
+    <!-- ledger lines -->
+    <path android:fillColor="#9CCFC0"
+        android:pathData="M49,59h14a1.2,1.2 0 0 1 0,2.4h-14a1.2,1.2 0 0 1 0,-2.4z" />
+    <path android:fillColor="#9CCFC0"
+        android:pathData="M49,64h14a1.2,1.2 0 0 1 0,2.4h-14a1.2,1.2 0 0 1 0,-2.4z" />
+    <path android:fillColor="#9CCFC0"
+        android:pathData="M49,69h9a1.2,1.2 0 0 1 0,2.4h-9a1.2,1.2 0 0 1 0,-2.4z" />
+</vector>

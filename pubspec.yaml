@@ -1,0 +1,36 @@
+name: pharmacy_ledger
+description: Pharmacy Ledger. A simple, secure, offline ledger for daily pharmacy sales and warehouse payments.
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.6.0 <4.0.0'
+  flutter: '>=3.27.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:  
+    sdk: flutter
+  provider: ^6.1.2
+  sqflite: ^2.3.3
+  path: ^1.9.0
+  path_provider: ^2.1.4
+  shared_preferences: ^2.3.2
+  flutter_secure_storage: ^9.2.2
+  local_auth: ^2.3.0
+  local_auth_android: ^1.0.46
+  intl: ^0.20.3
+  crypto: ^3.0.5
+  cryptography: ^2.7.0
+  file_picker: ^8.1.2
+  share_plus: ^10.1.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+  sqflite_common_ffi: ^2.3.3
+
+flutter:
+  uses-material-design: true
