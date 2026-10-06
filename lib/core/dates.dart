@@ -1,5 +1,12 @@
 import 'package:intl/intl.dart';
 
+// [تم التعديل] - دالة عامة لتحويل الأرقام العربية الشرقية إلى غربية
+String _westernDigits(String s) =>
+    s.replaceAllMapped(
+      RegExp('[\u0660-\u0669]'),
+      (m) => String.fromCharCode(m.group(0)!.codeUnitAt(0) - 0x0660 + 0x0030),
+    );
+
 /// Inclusive date range of calendar days.
 class DateRange {
   DateRange(DateTime start, DateTime end)
@@ -39,9 +46,7 @@ class DateRange {
   String toString() => '$startKey..$endKey';
 }
 
-/// A reporting week inside a month:
-/// Week 1 = days 1-7, Week 2 = 8-14, Week 3 = 15-21, Week 4 = 22-28,
-/// Week 5 = 29-end of month (only when the month has more than 28 days).
+/// A reporting week inside a month.
 class MonthWeek {
   const MonthWeek({
     required this.year,
@@ -60,14 +65,11 @@ class MonthWeek {
   DateRange get range =>
       DateRange(DateTime(year, month, firstDay), DateTime(year, month, lastDay));
 
-  // [تم التعديل] - ترجمة "Week" إلى "الأسبوع"
   String get title => 'الأسبوع $number';
 
-  // [تم التعديل] - ترجمة "Day" و "Days" إلى "اليوم" و "الأيام"
   String get daysLabel =>
       firstDay == lastDay ? 'اليوم $firstDay' : 'الأيام $firstDay–$lastDay';
 
-  // [تم التعديل] - استخدام 'ar' كلغة مع تحويل الأرقام إلى غربية
   String get longLabel =>
       '${_westernDigits(DateFormat('MMMM', 'ar').format(DateTime(year, month)))} $firstDay–$lastDay';
 
@@ -87,7 +89,6 @@ class Dates {
 
   static DateTime dateOnly(DateTime d) => DateTime(d.year, d.month, d.day);
 
-  /// Storage key "yyyy-MM-dd". Sorts lexicographically == chronologically.
   static String key(DateTime d) =>
       '${d.year.toString().padLeft(4, '0')}-${_2(d.month)}-${_2(d.day)}';
 
@@ -118,10 +119,8 @@ class Dates {
 
   static bool isValidTime(String time) => _timePattern.hasMatch(time);
 
-  /// Storage time "HH:mm:ss" (24h, local device time).
   static String timeKey(DateTime d) => '${_2(d.hour)}:${_2(d.minute)}:${_2(d.second)}';
 
-  /// "12:35"
   static String shortTime(String timeKey) =>
       timeKey.length >= 5 ? timeKey.substring(0, 5) : timeKey;
 
@@ -138,8 +137,6 @@ class Dates {
   static DateRange yearRange(int year) =>
       DateRange(DateTime(year, 1, 1), DateTime(year, 12, 31));
 
-  /// Reporting weeks of a month. Never returns an empty fifth week and
-  /// never skips a day.
   static List<MonthWeek> weeksOfMonth(int year, int month) {
     final days = daysInMonth(year, month);
     final weeks = <MonthWeek>[];
@@ -164,8 +161,6 @@ class Dates {
   static bool isSameDay(DateTime a, DateTime b) =>
       a.year == b.year && a.month == b.month && a.day == b.day;
 
-  // [تم التعديل] - ترجمة عرض التواريخ مع الحفاظ على الأرقام الغربية
-  // استخدام 'ar' كلغة للأسماء العربية، ثم تحويل الأرقام الشرقية إلى غربية
   static String fullDate(DateTime d) => 
       _westernDigits(DateFormat('EEEE، d MMMM y', 'ar').format(d));
       
@@ -185,11 +180,4 @@ class Dates {
       _westernDigits(DateFormat('MMM', 'ar').format(DateTime(2000, month)));
 
   static String _2(int v) => v.toString().padLeft(2, '0');
-  
-  // [تم التعديل] - دالة مساعدة لتحويل الأرقام العربية الشرقية (٠-٩) إلى غربية (0-9)
-  static String _westernDigits(String s) =>
-      s.replaceAllMapped(
-        RegExp('[\u0660-\u0669]'),
-        (m) => String.fromCharCode(m.group(0)!.codeUnitAt(0) - 0x0660 + 0x0030),
-      );
 }

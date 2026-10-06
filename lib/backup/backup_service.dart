@@ -25,14 +25,14 @@ class BackupPasswordRequired implements Exception {
 
 class BackupMessages {
   BackupMessages._();
-  static const notABackup = 'This file is not a valid Pharmacy Ledger backup.';
-  static const corrupted = 'The backup file is damaged or has been modified and cannot be restored.';
+  static const notABackup = 'هذا الملف ليس نسخة احتياطية صالحة لدفتر الصيدلية.';
+  static const corrupted = 'ملف النسخة الاحتياطية تالف أو تم تعديله ولا يمكن استعادته.';
   static const newerVersion =
-      'This backup was created by a newer version of Pharmacy Ledger. Please update the app first.';
-  static const wrongPassword = 'Incorrect backup password.';
-  static const tooLarge = 'This file is too large to be a Pharmacy Ledger backup.';
+      'هذه النسخة الاحتياطية أُنشئت بإصدار أحدث من دفتر الصيدلية. يرجى تحديث التطبيق أولاً.';
+  static const wrongPassword = 'كلمة مرور النسخة الاحتياطية غير صحيحة.';
+  static const tooLarge = 'هذا الملف كبير جداً ليكون نسخة احتياطية لدفتر الصيدلية.';
   static const restoreFailed =
-      'The backup could not be restored. Your current data was not changed.';
+      'تعذّرت استعادة النسخة الاحتياطية. لم يتم تغيير بياناتك الحالية.';
 }
 
 /// Validated, ready-to-restore backup content.

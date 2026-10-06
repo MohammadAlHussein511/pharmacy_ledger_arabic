@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/dates.dart';
@@ -23,7 +23,7 @@ class HomeScreen extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(
         // [تم التعديل] - ترك الاسم بالإنجليزية كما هو، مع تحسين الخط
-        title: const Text('Pharmacy Ledger', style: TextStyle(fontWeight: FontWeight.w700)),
+        title: const Text('دفتر الصيدلية', style: TextStyle(fontWeight: FontWeight.w700)),
         actions: [
           IconButton(
             // [تم التعديل] - ترجمة tooltip البحث
@@ -127,3 +127,4 @@ class _PeriodCard extends StatelessWidget {
         child: SummaryBlock(summary: summary, showAllCurrencies: true, emphasized: emphasized),
       );
 }
+

@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
-import '../../core/app_info.dart';
 import '../../data/repositories/settings_repository.dart';
 import '../../security/app_lock_controller.dart';
 import '../../security/pin_service.dart';
@@ -61,18 +60,6 @@ class SettingsScreen extends StatelessWidget {
                     onChanged: (v) => v ? _enableLock(context) : _disableLock(context),
                   ),
                   const Divider(height: 1),
-                  SwitchListTile(
-                    secondary: const Icon(Icons.fingerprint),
-                    title: const Text('فتح ببصمة الإصبع'),
-                    subtitle: Text(lock.lockEnabled
-                        ? 'افتح ببصمة إصبعك'
-                        : 'فعّل قفل التطبيق أولاً'),
-                    value: lock.biometricEnabled,
-                    onChanged: lock.lockEnabled
-                        ? (v) => v ? _enableBiometric(context) : _disableBiometric(context)
-                        : null,
-                  ),
-                  const Divider(height: 1),
                   ListTile(
                     leading: const Icon(Icons.pin_outlined),
                     title: const Text('تغيير رمز PIN'),
@@ -84,19 +71,11 @@ class SettingsScreen extends StatelessWidget {
                   ListTile(
                     leading: const Icon(Icons.timer_outlined),
                     title: const Text('توقيت القفل'),
-                    subtitle: Text('القفل عند العمل في الخلفية: ${lock.timeout.label.toLowerCase()}'),
+                    subtitle: Text('القفل عند العمل في الخلفية: ${_timeoutLabel(lock.timeout)}'),
                     enabled: lock.lockEnabled,
                     trailing: const Icon(Icons.chevron_right),
                     onTap: () => _pickTimeout(context),
                   ),
-                  if (lock.lockEnabled) ...[
-                    const Divider(height: 1),
-                    ListTile(
-                      leading: const Icon(Icons.lock_clock_outlined),
-                      title: const Text('قفل الآن'),
-                      onTap: lock.lockNow,
-                    ),
-                  ],
                 ],
               ),
             ),
@@ -134,35 +113,26 @@ class SettingsScreen extends StatelessWidget {
                 ),
               ),
             ),
-            // ----------------------------------------------------------- about
-            header('حول'),
-            Card(
-              child: Column(
-                children: [
-                  const ListTile(
-                    leading: Icon(Icons.menu_book_rounded),
-                    title: Text(AppInfo.name),
-                    subtitle: Text('الإصدار ${AppInfo.version} (${AppInfo.buildNumber})'),
-                  ),
-                  const Divider(height: 1),
-                  ListTile(
-                    leading: const Icon(Icons.info_outline),
-                    title: const Text(AppInfo.description),
-                    subtitle: const Text('يعمل بدون إنترنت تماماً. لا يتطلب حساباً.'),
-                    onTap: () => showLicensePage(
-                      context: context,
-                      applicationName: AppInfo.name,
-                      applicationVersion: AppInfo.version,
-                    ),
-                  ),
-                ],
-              ),
-            ),
           ],
         ),
       ),
     );
   }
+
+  String _timeoutLabel(LockTimeout t) {
+  switch (t.seconds) {
+    case 0:
+      return 'فوراً';
+    case 30:
+      return 'بعد 30 ثانية';
+    case 60:
+      return 'بعد دقيقة واحدة';
+    case 300:
+      return 'بعد 5 دقائق';
+    default:
+      return t.label; // احتياطي
+  }
+}
 
   Future<void> _enableLock(BuildContext context) async {
     final lock = context.read<AppLockController>();
@@ -185,28 +155,6 @@ class SettingsScreen extends StatelessWidget {
     if (pin == null) return;
     final r = await lock.disableAppLock(pin);
     if (context.mounted && r is PinOk) showMessage(context, 'تم إيقاف قفل التطبيق.');
-  }
-
-  Future<void> _enableBiometric(BuildContext context) async {
-    final lock = context.read<AppLockController>();
-    final ok = await confirmDialog(
-      context,
-      title: 'تفعيل فتح بصمة الإصبع؟',
-      message: 'ستتمكن من فتح دفتر الصيدلية ببصمة إصبعك. '
-          'سيظل رمز PIN يعمل كخيار احتياطي. لا تغادر بيانات البصمة هاتفك.',
-      confirmLabel: 'تفعيل',
-    );
-    if (!ok) return;
-    final error = await lock.enableBiometric();
-    if (context.mounted) showMessage(context, error ?? 'تم تفعيل فتح بصمة الإصبع.');
-  }
-
-  Future<void> _disableBiometric(BuildContext context) async {
-    final lock = context.read<AppLockController>();
-    final pin = await askCurrentPin(context, pins: lock.pins, title: 'تأكيد رمز PIN');
-    if (pin == null) return;
-    final r = await lock.disableBiometric(pin);
-    if (context.mounted && r is PinOk) showMessage(context, 'تم إيقاف فتح بصمة الإصبع.');
   }
 
   Future<void> _changePin(BuildContext context) async {
@@ -235,7 +183,7 @@ class SettingsScreen extends StatelessWidget {
                 children: [
                   Icon(t == lock.timeout ? Icons.radio_button_checked : Icons.radio_button_off, size: 20),
                   const SizedBox(width: 12),
-                  Text(t.label),
+                  Text(_timeoutLabel(t)),
                 ],
               ),
             ),

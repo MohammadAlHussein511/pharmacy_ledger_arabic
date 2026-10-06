@@ -1,7 +1,12 @@
-import 'package:flutter/material.dart';
+import 'dart:async';
 
+import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+
+import '../../security/app_lock_controller.dart';
 import '../../security/pin_service.dart';
 import '../widgets/pin_pad.dart';
+// ← حذفنا import 'pin_entry_screen.dart'; لأنه كان يستورد نفسه
 
 // [تم التعديل] - ترجمة رسائل حالة PIN
 String pinResultMessage(PinResult r) => switch (r) {

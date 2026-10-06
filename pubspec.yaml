@@ -23,14 +23,23 @@ dependencies:
   intl: ^0.20.3
   crypto: ^3.0.5
   cryptography: ^2.7.0
-  file_picker: ^8.1.2
+  file_picker: ^10.1.9
   share_plus: ^10.1.0
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^4.0.0
+  flutter_launcher_icons: ^0.14.3
   sqflite_common_ffi: ^2.3.3
+
+flutter_launcher_icons:
+  android: true
+  ios: false
+  image_path: "assets/icon/logo.png"
+  # اختياري: خلفية الأيقونة التكيفية في Android الحديث
+  adaptive_icon_background: "#1B7F5C"
+  adaptive_icon_foreground: "assets/icon/logo.png"
 
 flutter:
   uses-material-design: true

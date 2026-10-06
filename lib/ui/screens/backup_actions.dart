@@ -30,17 +30,17 @@ Future<void> createBackupFlow(BuildContext context) async {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const ListTile(title: Text('Where do you want to save the backup?')),
+          const ListTile(title: Text('أين تريد حفظ النسخة الاحتياطية؟')),
           ListTile(
             leading: const Icon(Icons.save_alt),
-            title: const Text('Save to device'),
-            subtitle: const Text('Choose a folder on this phone'),
+            title: const Text('حفظ على الجهاز'),
+            subtitle: const Text('اختر مجلداً على هذا الهاتف'),
             onTap: () => Navigator.pop(ctx, 'save'),
           ),
           ListTile(
             leading: const Icon(Icons.share_outlined),
-            title: const Text('Share'),
-            subtitle: const Text('Google Drive, email, or another app'),
+            title: const Text('مشاركة'),
+            subtitle: const Text('Google Drive أو البريد الإلكتروني أو تطبيق آخر'),
             onTap: () => Navigator.pop(ctx, 'share'),
           ),
           const SizedBox(height: 8),
@@ -50,14 +50,14 @@ Future<void> createBackupFlow(BuildContext context) async {
   );
   if (destination == null || !context.mounted) return;
 
-  _showProgress(context, 'Creating backup...');
+  _showProgress(context, 'جارٍ إنشاء النسخة الاحتياطية...');
   Uint8List bytes;
   try {
     bytes = await services.backup.createBackup(password: password.isEmpty ? null : password);
   } catch (_) {
     if (context.mounted) {
       Navigator.pop(context);
-      showMessage(context, 'Could not create the backup. Please try again.');
+      showMessage(context, 'تعذّر إنشاء النسخة الاحتياطية. يرجى المحاولة مرة أخرى.');
     }
     return;
   }
@@ -68,12 +68,12 @@ Future<void> createBackupFlow(BuildContext context) async {
   try {
     if (destination == 'save') {
       final path = await lock.runWithoutLocking(() => FilePicker.platform.saveFile(
-            dialogTitle: 'Save backup',
+            dialogTitle: 'حفظ النسخة الاحتياطية',
             fileName: name,
             bytes: bytes,
           ));
       if (context.mounted) {
-        showMessage(context, path == null ? 'Backup was not saved.' : 'Backup saved successfully.');
+        showMessage(context, path == null ? 'لم يتم حفظ النسخة الاحتياطية.' : 'تم حفظ النسخة الاحتياطية بنجاح.');
       }
     } else {
       final dir = await getTemporaryDirectory();
@@ -81,14 +81,14 @@ Future<void> createBackupFlow(BuildContext context) async {
       await file.writeAsBytes(bytes, flush: true);
       final result = await lock.runWithoutLocking(() => Share.shareXFiles(
             [XFile(file.path, mimeType: 'application/json', name: name)],
-            subject: 'Pharmacy Ledger backup',
+            subject: 'نسخة احتياطية لدفتر الصيدلية',
           ));
       if (context.mounted && result.status == ShareResultStatus.success) {
-        showMessage(context, 'Backup shared successfully.');
+        showMessage(context, 'تمت مشاركة النسخة الاحتياطية بنجاح.');
       }
     }
   } catch (_) {
-    if (context.mounted) showMessage(context, 'Could not save the backup file. Please try again.');
+    if (context.mounted) showMessage(context, 'تعذّر حفظ ملف النسخة الاحتياطية. يرجى المحاولة مرة أخرى.');
   }
 }
 
@@ -113,7 +113,7 @@ class _BackupPasswordDialogState extends State<_BackupPasswordDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: const Text('Create Backup'),
+      title: const Text('إنشاء نسخة احتياطية'),
       content: SingleChildScrollView(
         child: Form(
           key: _formKey,
@@ -122,8 +122,8 @@ class _BackupPasswordDialogState extends State<_BackupPasswordDialog> {
             children: [
               SwitchListTile(
                 contentPadding: EdgeInsets.zero,
-                title: const Text('Protect with a password'),
-                subtitle: const Text('Recommended. The backup is encrypted and cannot be read without it.'),
+                title: const Text('حماية بكلمة مرور'),
+                subtitle: const Text('موصى به. النسخة الاحتياطية مشفرة ولا يمكن قراءتها بدون كلمة المرور.'),
                 value: _protect,
                 onChanged: (v) => setState(() => _protect = v),
               ),
@@ -131,20 +131,20 @@ class _BackupPasswordDialogState extends State<_BackupPasswordDialog> {
                 TextFormField(
                   controller: _pwd,
                   obscureText: true,
-                  decoration: const InputDecoration(labelText: 'Backup password'),
+                  decoration: const InputDecoration(labelText: 'كلمة مرور النسخة الاحتياطية'),
                   validator: (v) =>
-                      (v ?? '').length < 6 ? 'Use at least 6 characters.' : null,
+                      (v ?? '').length < 6 ? 'استخدم 6 أحرف على الأقل.' : null,
                 ),
                 const SizedBox(height: 10),
                 TextFormField(
                   controller: _confirm,
                   obscureText: true,
-                  decoration: const InputDecoration(labelText: 'Confirm password'),
-                  validator: (v) => v != _pwd.text ? 'Passwords do not match.' : null,
+                  decoration: const InputDecoration(labelText: 'تأكيد كلمة المرور'),
+                  validator: (v) => v != _pwd.text ? 'كلمتا المرور غير متطابقتين.' : null,
                 ),
                 const SizedBox(height: 8),
                 const Text(
-                  'Keep this password safe. Without it the backup cannot be restored.',
+                  'احتفظ بكلمة المرور في مكان آمن. بدونها لا يمكن استعادة النسخة الاحتياطية.',
                   style: TextStyle(fontSize: 12),
                 ),
               ],
@@ -153,14 +153,14 @@ class _BackupPasswordDialogState extends State<_BackupPasswordDialog> {
         ),
       ),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('إلغاء')),
         FilledButton(
           style: FilledButton.styleFrom(minimumSize: const Size(64, 40)),
           onPressed: () {
             if (_protect && !_formKey.currentState!.validate()) return;
             Navigator.pop(context, _protect ? _pwd.text : '');
           },
-          child: const Text('Continue'),
+          child: const Text('متابعة'),
         ),
       ],
     );
@@ -178,7 +178,7 @@ Future<void> restoreBackupFlow(BuildContext context) async {
     picked = await lock.runWithoutLocking(
         () => FilePicker.platform.pickFiles(type: FileType.any, withData: true));
   } catch (_) {
-    if (context.mounted) showMessage(context, 'Could not open the file.');
+    if (context.mounted) showMessage(context, 'تعذّر فتح الملف.');
     return;
   }
   final file = picked?.files.single;
@@ -195,7 +195,7 @@ Future<void> restoreBackupFlow(BuildContext context) async {
   String? password;
   while (preview == null) {
     if (!context.mounted) return;
-    _showProgress(context, 'Checking backup...');
+    _showProgress(context, 'جارٍ فحص النسخة الاحتياطية...');
     try {
       preview = await services.backup.inspect(bytes, password: password);
       if (context.mounted) Navigator.pop(context);
@@ -219,20 +219,20 @@ Future<void> restoreBackupFlow(BuildContext context) async {
   if (!context.mounted) return;
 
   // 2) Explicit confirmation. Never overwrite silently.
-  final created = preview.createdAt == null ? 'unknown date' : Dates.mediumDate(preview.createdAt!);
+  final created = preview.createdAt == null ? 'تاريخ غير معروف' : Dates.mediumDate(preview.createdAt!);
   final ok = await confirmDialog(
     context,
-    title: 'Restore Backup',
-    message: 'Backup from $created\n'
-        '${preview.transactionCount} transactions · ${preview.warehouseCount} warehouses\n\n'
-        'Restoring this backup will replace the current application data. Do you want to continue?',
-    confirmLabel: 'Restore',
+    title: 'استعادة نسخة احتياطية',
+    message: 'نسخة احتياطية من $created\n'
+        '${preview.transactionCount} عملية · ${preview.warehouseCount} مستودع\n\n'
+        'استعادة هذه النسخة ستستبدل بيانات التطبيق الحالية. هل تريد المتابعة؟',
+    confirmLabel: 'استعادة',
     destructive: true,
   );
   if (!ok || !context.mounted) return;
 
   // 3) Safety snapshot of current data, then atomic replace.
-  _showProgress(context, 'Restoring...');
+  _showProgress(context, 'جارٍ الاستعادة...');
   try {
     final dir = await getApplicationDocumentsDirectory();
     final safety = Directory(p.join(dir.path, 'safety_backups'));
@@ -246,7 +246,7 @@ Future<void> restoreBackupFlow(BuildContext context) async {
     services.store.changed();
     if (context.mounted) {
       Navigator.pop(context);
-      showMessage(context, 'Backup restored successfully.');
+      showMessage(context, 'تمت استعادة النسخة الاحتياطية بنجاح.');
     }
   } on BackupException catch (e) {
     if (context.mounted) {
@@ -276,22 +276,22 @@ Future<String?> _askRestorePassword(BuildContext context, String? error) {
   return showDialog<String>(
     context: context,
     builder: (ctx) => AlertDialog(
-      title: const Text('Backup password'),
+      title: const Text('كلمة مرور النسخة الاحتياطية'),
       content: TextField(
         controller: c,
         obscureText: true,
         autofocus: true,
         decoration: InputDecoration(
-          labelText: 'Enter the password for this backup',
+          labelText: 'أدخل كلمة المرور لهذه النسخة',
           errorText: error,
         ),
       ),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('إلغاء')),
         FilledButton(
           style: FilledButton.styleFrom(minimumSize: const Size(64, 40)),
           onPressed: () => Navigator.pop(ctx, c.text),
-          child: const Text('Continue'),
+          child: const Text('متابعة'),
         ),
       ],
     ),
@@ -301,13 +301,13 @@ Future<String?> _askRestorePassword(BuildContext context, String? error) {
 Future<void> _showError(BuildContext context, String message) => showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Restore Backup'),
+        title: const Text('استعادة نسخة احتياطية'),
         content: Text(message),
         actions: [
           FilledButton(
             style: FilledButton.styleFrom(minimumSize: const Size(64, 40)),
             onPressed: () => Navigator.pop(ctx),
-            child: const Text('OK'),
+            child: const Text('حسناً'),
           ),
         ],
       ),

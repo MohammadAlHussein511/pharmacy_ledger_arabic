@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
+import 'package:provider/provider.dart';
+
 import 'core/theme.dart';
 import 'security/app_lock_controller.dart';
 import 'services.dart';
@@ -46,8 +47,8 @@ class _PharmacyLedgerAppState extends State<PharmacyLedgerApp> {
         ChangeNotifierProvider.value(value: s.theme),
         ChangeNotifierProvider.value(value: _dayClock),
       ],
-      child: Consumer<ThemeController>(
-        builder: (context, theme, _) => MaterialApp(
+      child: Consumer2<ThemeController, AppLockController>(
+        builder: (context, theme, lock, _) => MaterialApp(
           title: 'دفتر الصيدلية',
           debugShowCheckedModeBanner: false,
           locale: const Locale('ar'),
@@ -60,52 +61,31 @@ class _PharmacyLedgerAppState extends State<PharmacyLedgerApp> {
           theme: AppTheme.light(),
           darkTheme: AppTheme.dark(),
           themeMode: theme.mode,
-          // Force RTL for Arabic
           builder: (context, child) => Directionality(
             textDirection: TextDirection.rtl,
-              child: MediaQuery(
+            child: MediaQuery(
               data: MediaQuery.of(context).copyWith(
                 textScaler: MediaQuery.of(context).textScaler.clamp(maxScaleFactor: 1.4),
               ),
-              child: _LockGate(child: child ?? const SizedBox.shrink()),
+              child: child ?? const SizedBox.shrink(),
             ),
           ),
-          home: _onboarded
-              ? const HomeShell()
-              : WelcomeScreen(onDone: () async {
+          home: Builder(
+            builder: (context) {
+              if (lock.locked) {
+                return const LockScreen();
+              }
+              if (!_onboarded) {
+                return WelcomeScreen(onDone: () async {
                   await s.settings.setOnboardingDone();
                   setState(() => _onboarded = true);
-                }
-              ),
-            ),
+                });
+              }
+              return const HomeShell();
+            },
           ),
         ),
-  }
-}
-
-/// Covers the whole navigator with the lock screen while locked, so no
-/// financial data is visible (also in the recent-apps preview).
-class _LockGate extends StatelessWidget {
-  const _LockGate({required this.child});
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) {
-    final lock = context.watch<AppLockController>();
-    return Stack(
-      children: [
-        Offstage(offstage: lock.locked, child: TickerMode(enabled: !lock.locked, child: child)),
-        if (lock.locked)
-          Positioned.fill(
-            // Own navigator gives the lock screen an Overlay without
-            // disturbing the user's place in the main navigation stack.
-            child: Navigator(
-              onGenerateRoute: (_) => PageRouteBuilder<void>(
-                pageBuilder: (_, __, ___) => const LockScreen(),
-              ),
-            ),
-          ),
-      ],
+      ),
     );
   }
 }

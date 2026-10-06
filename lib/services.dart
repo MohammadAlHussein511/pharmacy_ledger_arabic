@@ -10,7 +10,6 @@ import 'data/repositories/transaction_repository.dart';
 import 'data/repositories/warehouse_repository.dart';
 import 'domain/report_service.dart';
 import 'security/app_lock_controller.dart';
-import 'security/biometric_service.dart';
 import 'security/pin_service.dart';
 import 'ui/theme_controller.dart';
 
@@ -49,7 +48,6 @@ class AppServices {
     final lock = AppLockController(
       settings: settings,
       pins: PinService(SecureSecretStore(secure)),
-      biometrics: PlatformBiometricService(),
     );
     await lock.init();
     return AppServices._(

@@ -6,10 +6,9 @@ import 'package:provider/provider.dart';
 import '../../security/app_lock_controller.dart';
 import '../../security/pin_service.dart';
 import '../widgets/pin_pad.dart';
-import 'pin_entry_screen.dart';
+import 'pin_entry_screen.dart'; // ← أضفنا هذا الاستيراد
 
-/// Shown above everything while the app is locked.
-/// Flow: system biometric prompt first (if enabled) -> PIN fallback.
+/// Shown above everything while the app is locked. PIN only.
 class LockScreen extends StatefulWidget {
   const LockScreen({super.key});
 
@@ -20,7 +19,6 @@ class LockScreen extends StatefulWidget {
 class _LockScreenState extends State<LockScreen> with WidgetsBindingObserver {
   String? _message;
   bool _messageIsError = false;
-  bool _bioInProgress = false;
   DateTime? _lockedUntil;
   Timer? _ticker;
 
@@ -28,16 +26,7 @@ class _LockScreenState extends State<LockScreen> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    final lock = context.read<AppLockController>();
-    final pending = lock.takePendingMessage();
-    if (pending != null) {
-      _message = pending;
-      _messageIsError = true;
-    }
     _refreshLockout();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted && lock.biometricEnabled) _tryBiometric();
-    });
   }
 
   @override
@@ -72,21 +61,6 @@ class _LockScreenState extends State<LockScreen> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _tryBiometric() async {
-    if (_bioInProgress) return;
-    setState(() => _bioInProgress = true);
-    final lock = context.read<AppLockController>();
-    final r = await lock.unlockWithBiometric();
-    if (!mounted) return;
-    setState(() {
-      _bioInProgress = false;
-      if (!r.success && r.message != null) {
-        _message = r.message;
-        _messageIsError = true;
-      }
-    });
-  }
-
   Future<bool> _submitPin(String pin) async {
     final lock = context.read<AppLockController>();
     final r = await lock.unlockWithPin(pin);
@@ -102,7 +76,6 @@ class _LockScreenState extends State<LockScreen> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
-    final lock = context.watch<AppLockController>();
     final cs = Theme.of(context).colorScheme;
     final t = Theme.of(context).textTheme;
     return Scaffold(
@@ -122,15 +95,11 @@ class _LockScreenState extends State<LockScreen> with WidgetsBindingObserver {
                   ),
                 ),
                 const SizedBox(height: 14),
-                // [تم التعديل] - ترجمة عنوان شاشة القفل
                 Text('فتح دفتر الصيدلية',
                     style: t.titleLarge?.copyWith(fontWeight: FontWeight.w700)),
                 const SizedBox(height: 4),
-                // [تم التعديل] - ترجمة الوصف النصي
                 Text(
-                  lock.biometricEnabled
-                      ? 'استخدم بصمة إصبعك أو أدخل رمز PIN للمتابعة.'
-                      : 'أدخل رمز PIN للمتابعة.',
+                  'أدخل رمز PIN للمتابعة.',
                   textAlign: TextAlign.center,
                   style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
                 ),
@@ -146,13 +115,6 @@ class _LockScreenState extends State<LockScreen> with WidgetsBindingObserver {
                 PinPad(
                   enabled: _lockedUntil == null,
                   onSubmit: _submitPin,
-                  extraAction: lock.biometricEnabled
-                      ? IconButton(
-                          iconSize: 34,
-                          onPressed: _bioInProgress ? null : _tryBiometric,
-                          icon: Icon(Icons.fingerprint, color: cs.primary),
-                        )
-                      : null,
                 ),
               ],
             ),

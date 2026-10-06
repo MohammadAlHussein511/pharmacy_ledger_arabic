@@ -1,7 +1,0 @@
-# Copy to android/key.properties (never commit the real file) and fill in.
-# Create a keystore once with:
-#   keytool -genkey -v -keystore ~/pharmacy-ledger-release.jks -keyalg RSA -keysize 2048 -validity 10000 -alias pharmacyledger
-storePassword=CHANGE_ME
-keyPassword=CHANGE_ME
-keyAlias=pharmacyledger
-storeFile=/absolute/path/to/pharmacy-ledger-release.jks

@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 
@@ -39,7 +39,7 @@ class _StartupErrorApp extends StatelessWidget {
               children: [
                 const Icon(Icons.error_outline, size: 56),
                 const SizedBox(height: 16),
-                const Text('Pharmacy Ledger could not start',
+                const Text('دفتر الصيدلية could not start',
                     style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600)),
                 const SizedBox(height: 8),
                 const Text(
@@ -57,3 +57,4 @@ class _StartupErrorApp extends StatelessWidget {
     );
   }
 }
+
