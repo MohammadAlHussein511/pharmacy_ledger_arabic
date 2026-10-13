@@ -1,13 +1,17 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
+import '../../services.dart';
+import '../../sync/auto_sync.dart';
+import 'accounts_screen.dart';
 import 'home_screen.dart';
 import 'reports/reports_screen.dart';
 import 'settings_screen.dart';
 import 'today_screen.dart';
 import 'warehouses_screen.dart';
+import 'weeks_screen.dart';
 
-/// Five destinations keep navigation simple on a phone:
-/// Home · Today · Reports (Week / Month / Year) · Warehouses · Settings.
+/// 8 تبويبات مع سكرول جانبي: الرئيسية، اليوم، الأسابيع، المستودعات، التقارير، الحسابات، الإعدادات، المزيد
 class HomeShell extends StatefulWidget {
   const HomeShell({super.key});
 
@@ -18,53 +22,119 @@ class HomeShell extends StatefulWidget {
   State<HomeShell> createState() => HomeShellState();
 }
 
-class HomeShellState extends State<HomeShell> {
-  int _index = 0;
+class HomeShellState extends State<HomeShell> with SingleTickerProviderStateMixin {
+  late final TabController _tabController;
   final _reportsKey = GlobalKey<ReportsScreenState>();
+  AutoSync? _autoSync;
 
-  void openTab(int index) => setState(() => _index = index);
+  @override
+  void initState() {
+    super.initState();
+    _tabController = TabController(length: 8, vsync: this);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _autoSync = AutoSync(context.read<AppServices>())..start();
+    });
+  }
+
+  @override
+  void dispose() {
+    _tabController.dispose();
+    _autoSync?.stop();
+    super.dispose();
+  }
+
+  void openTab(int index) {
+    setState(() {
+      _tabController.index = index;
+    });
+  }
 
   void openReports(ReportTab tab) {
-    setState(() => _index = 2);
-    WidgetsBinding.instance.addPostFrameCallback((_) => _reportsKey.currentState?.show(tab));
+    setState(() {
+      _tabController.index = 4; // التقارير
+    });
+    WidgetsBinding.instance
+        .addPostFrameCallback((_) => _reportsKey.currentState?.show(tab));
   }
 
   @override
   Widget build(BuildContext context) {
     return PopScope(
-      canPop: _index == 0,
+      canPop: _tabController.index == 0,
       onPopInvokedWithResult: (didPop, _) {
-        if (!didPop) setState(() => _index = 0);
+        if (!didPop) {
+          setState(() {
+            _tabController.index = 0;
+          });
+        }
       },
       child: Scaffold(
-        body: IndexedStack(
-          index: _index,
+        body: TabBarView(
+          controller: _tabController,
           children: [
             const HomeScreen(),
             const TodayScreen(),
+            const WeeksScreen(),
+            const WarehousesScreen(standalone: true),
             ReportsScreen(key: _reportsKey),
-            const WarehousesScreen(),
+            const AccountsScreen(),
             const SettingsScreen(),
+            const _MoreScreen(),
           ],
         ),
-        bottomNavigationBar: NavigationBar(
-          selectedIndex: _index,
-          onDestinationSelected: openTab,
-          labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
-          destinations: const [
-            // [تم التعديل] - ترجمة علامات التبويب السفلية
-            NavigationDestination(
-                icon: Icon(Icons.dashboard_outlined), selectedIcon: Icon(Icons.dashboard), label: 'الرئيسية'),
-            NavigationDestination(
-                icon: Icon(Icons.today_outlined), selectedIcon: Icon(Icons.today), label: 'اليوم'),
-            NavigationDestination(
-                icon: Icon(Icons.bar_chart_outlined), selectedIcon: Icon(Icons.bar_chart), label: 'التقارير'),
-            NavigationDestination(
-                icon: Icon(Icons.warehouse_outlined), selectedIcon: Icon(Icons.warehouse), label: 'المستودعات'),
-            NavigationDestination(
-                icon: Icon(Icons.settings_outlined), selectedIcon: Icon(Icons.settings), label: 'الإعدادات'),
-          ],
+        bottomNavigationBar: Material(
+          color: Theme.of(context).colorScheme.surface,
+          child: TabBar(
+            controller: _tabController,
+            isScrollable: true,
+            tabAlignment: TabAlignment.start,
+            labelStyle: Theme.of(context).textTheme.labelSmall?.copyWith(fontWeight: FontWeight.w600),
+            unselectedLabelStyle: Theme.of(context).textTheme.labelSmall,
+            tabs: const [
+              Tab(icon: Icon(Icons.dashboard_outlined), text: 'الرئيسية'),
+              Tab(icon: Icon(Icons.today_outlined), text: 'اليوم'),
+              Tab(icon: Icon(Icons.calendar_month_outlined), text: 'الأسابيع'),
+              Tab(icon: Icon(Icons.warehouse_outlined), text: 'المستودعات'),
+              Tab(icon: Icon(Icons.bar_chart_outlined), text: 'التقارير'),
+              Tab(icon: Icon(Icons.account_balance_wallet_outlined), text: 'الحسابات'),
+              Tab(icon: Icon(Icons.settings_outlined), text: 'الإعدادات'),
+              Tab(icon: Icon(Icons.more_horiz), text: 'المزيد'),
+            ],
+          ),
         ),
+      ),
+    );
+  }
+}
+
+class _MoreScreen extends StatelessWidget {
+  const _MoreScreen();
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('المزيد')),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          Card(
+            child: ListTile(
+              leading: const Icon(Icons.info_outline),
+              title: const Text('عن التطبيق'),
+              subtitle: const Text('الإصدار 2.0.0'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () {
+                showAboutDialog(
+                  context: context,
+                  applicationName: 'دفتر الصيدلية',
+                  applicationVersion: '2.0.0',
+                  applicationLegalese: '© 2026',
+                );
+              },
+            ),
+          ),
+        ],
       ),
     );
   }

@@ -5,8 +5,11 @@ import '../../core/dates.dart';
 import '../../domain/period_summary.dart';
 import '../../domain/report_service.dart';
 import '../../services.dart';
+import '../../sync/auto_sync.dart';
 import '../day_clock.dart';
+import '../theme_controller.dart';
 import '../widgets/common.dart';
+import '../widgets/notification_bell.dart';
 import '../widgets/revision_builder.dart';
 import '../widgets/transaction_widgets.dart';
 import 'home_shell.dart';
@@ -22,15 +25,30 @@ class HomeScreen extends StatelessWidget {
     final today = context.watch<DayClock>().today;
     return Scaffold(
       appBar: AppBar(
-        // [تم التعديل] - ترك الاسم بالإنجليزية كما هو، مع تحسين الخط
-        title: const Text('دفتر الصيدلية', style: TextStyle(fontWeight: FontWeight.w700)),
+        title: const Text('دفتر الصيدلية',
+            style: TextStyle(fontWeight: FontWeight.w700)),
         actions: [
           IconButton(
-            // [تم التعديل] - ترجمة tooltip البحث
+            tooltip: 'تحديث ومزامنة',
+            icon: const Icon(Icons.refresh),
+            onPressed: () async {
+              final sync = AutoSync.current;
+              if (sync == null) return;
+              final msg = await sync.syncNow();
+              if (!context.mounted) return;
+              context.read<AppServices>().store.changed();
+              showMessage(context, msg);
+            },
+          ),
+          const _ThemeToggleButton(),
+          const NotificationBell(),
+          IconButton(
             tooltip: 'البحث في المدفوعات',
             icon: const Icon(Icons.search),
             onPressed: () => Navigator.push(
-                context, MaterialPageRoute<void>(builder: (_) => const SearchScreen())),
+                context,
+                MaterialPageRoute<void>(
+                    builder: (_) => const SearchScreen())),
           ),
         ],
       ),
@@ -51,7 +69,6 @@ class HomeScreen extends StatelessWidget {
                     child: FilledButton.icon(
                       onPressed: () => openAddSale(context),
                       icon: const Icon(Icons.add),
-                      // [تم التعديل] - ترجمة زر إضافة بيع
                       label: const Text('إضافة بيع'),
                     ),
                   ),
@@ -60,14 +77,12 @@ class HomeScreen extends StatelessWidget {
                     child: FilledButton.tonalIcon(
                       onPressed: () => openAddPayment(context),
                       icon: const Icon(Icons.add),
-                      // [تم التعديل] - ترجمة زر إضافة دفعة
                       label: const Text('إضافة دفعة'),
                     ),
                   ),
                 ],
               ),
               const SizedBox(height: 16),
-              // [تم التعديل] - ترجمة عناوين الفترات الزمنية
               _PeriodCard(
                 title: 'اليوم',
                 subtitle: Dates.mediumDate(d.todayDate),
@@ -78,7 +93,7 @@ class HomeScreen extends StatelessWidget {
               const SizedBox(height: 12),
               _PeriodCard(
                 title: 'هذا الأسبوع',
-                subtitle: '${d.currentWeek.title} · ${d.currentWeek.longLabel}',
+                subtitle: '${d.currentWeek.title} - ${d.currentWeek.longLabel}',
                 summary: d.week,
                 onTap: () => HomeShell.of(context)?.openReports(ReportTab.week),
               ),
@@ -124,7 +139,24 @@ class _PeriodCard extends StatelessWidget {
         title: title,
         subtitle: subtitle,
         onTap: onTap,
-        child: SummaryBlock(summary: summary, showAllCurrencies: true, emphasized: emphasized),
+        child: SummaryBlock(
+            summary: summary, showAllCurrencies: true, emphasized: emphasized),
       );
 }
 
+class _ThemeToggleButton extends StatelessWidget {
+  const _ThemeToggleButton();
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = context.watch<ThemeController>();
+    final isDark = theme.mode == ThemeMode.dark;
+    return IconButton(
+      tooltip: isDark ? 'الوضع الفاتح' : 'الوضع الداكن',
+      icon: Icon(isDark ? Icons.light_mode_outlined : Icons.dark_mode_outlined),
+      onPressed: () {
+        theme.setMode(isDark ? ThemeMode.light : ThemeMode.dark);
+      },
+    );
+  }
+}

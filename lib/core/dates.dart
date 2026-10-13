@@ -1,13 +1,3 @@
-import 'package:intl/intl.dart';
-
-// [تم التعديل] - دالة عامة لتحويل الأرقام العربية الشرقية إلى غربية
-String _westernDigits(String s) =>
-    s.replaceAllMapped(
-      RegExp('[\u0660-\u0669]'),
-      (m) => String.fromCharCode(m.group(0)!.codeUnitAt(0) - 0x0660 + 0x0030),
-    );
-
-/// Inclusive date range of calendar days.
 class DateRange {
   DateRange(DateTime start, DateTime end)
       : start = Dates.dateOnly(start),
@@ -24,7 +14,6 @@ class DateRange {
     return !x.isBefore(start) && !x.isAfter(end);
   }
 
-  /// Every day in the range, in order.
   List<DateTime> get days {
     final out = <DateTime>[];
     var d = start;
@@ -46,7 +35,6 @@ class DateRange {
   String toString() => '$startKey..$endKey';
 }
 
-/// A reporting week inside a month.
 class MonthWeek {
   const MonthWeek({
     required this.year,
@@ -68,10 +56,9 @@ class MonthWeek {
   String get title => 'الأسبوع $number';
 
   String get daysLabel =>
-      firstDay == lastDay ? 'اليوم $firstDay' : 'الأيام $firstDay–$lastDay';
+      firstDay == lastDay ? 'اليوم $firstDay' : 'الأيام $firstDay-$lastDay';
 
-  String get longLabel =>
-      '${_westernDigits(DateFormat('MMMM', 'ar').format(DateTime(year, month)))} $firstDay–$lastDay';
+  String get longLabel => '${Dates.monthName(month)} $firstDay-$lastDay';
 
   @override
   bool operator ==(Object other) =>
@@ -86,6 +73,21 @@ class MonthWeek {
 
 class Dates {
   Dates._();
+
+  static const List<String> _weekdayNames = [
+    'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت', 'الأحد',
+  ];
+  static const List<String> _weekdayShort = [
+    'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت', 'الأحد',
+  ];
+  static const List<String> _monthNames = [
+    'يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو',
+    'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر',
+  ];
+  static const List<String> _monthShort = [
+    'يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو',
+    'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر',
+  ];
 
   static DateTime dateOnly(DateTime d) => DateTime(d.year, d.month, d.day);
 
@@ -161,23 +163,21 @@ class Dates {
   static bool isSameDay(DateTime a, DateTime b) =>
       a.year == b.year && a.month == b.month && a.day == b.day;
 
-  static String fullDate(DateTime d) => 
-      _westernDigits(DateFormat('EEEE، d MMMM y', 'ar').format(d));
-      
-  static String mediumDate(DateTime d) => 
-      _westernDigits(DateFormat('d MMMM y', 'ar').format(d));
-      
-  static String shortDate(DateTime d) => 
-      _westernDigits(DateFormat('EEE، d MMM', 'ar').format(d));
-      
-  static String monthYear(DateTime d) => 
-      _westernDigits(DateFormat('MMMM y', 'ar').format(d));
-      
-  static String monthName(int month) => 
-      _westernDigits(DateFormat('MMMM', 'ar').format(DateTime(2000, month)));
-      
-  static String shortMonthName(int month) => 
-      _westernDigits(DateFormat('MMM', 'ar').format(DateTime(2000, month)));
+  static String fullDate(DateTime d) =>
+      '${_weekdayNames[d.weekday - 1]}، ${d.day} ${_monthNames[d.month - 1]} ${d.year}';
+
+  static String mediumDate(DateTime d) =>
+      '${d.day} ${_monthNames[d.month - 1]} ${d.year}';
+
+  static String shortDate(DateTime d) =>
+      '${_weekdayShort[d.weekday - 1]}، ${d.day} ${_monthShort[d.month - 1]}';
+
+  static String monthYear(DateTime d) =>
+      '${_monthNames[d.month - 1]} ${d.year}';
+
+  static String monthName(int month) => _monthNames[month - 1];
+
+  static String shortMonthName(int month) => _monthShort[month - 1];
 
   static String _2(int v) => v.toString().padLeft(2, '0');
 }

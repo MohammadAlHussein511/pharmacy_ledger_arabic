@@ -70,6 +70,9 @@ class _PharmacyLedgerAppState extends State<PharmacyLedgerApp> {
               child: child ?? const SizedBox.shrink(),
             ),
           ),
+          onUnknownRoute: (_) => MaterialPageRoute<void>(
+            builder: (_) => const HomeShell(),
+          ),
           home: Builder(
             builder: (context) {
               if (lock.locked) {

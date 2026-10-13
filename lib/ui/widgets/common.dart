@@ -1,5 +1,3 @@
-import 'dart:ui' show FontFeature;
-
 import 'package:flutter/material.dart';
 
 import '../../core/currency.dart';
@@ -21,7 +19,6 @@ class AmountText extends StatelessWidget {
       maxLines: 1,
       overflow: TextOverflow.ellipsis,
       style: base.copyWith(
-        fontFeatures: const [FontFeature.tabularFigures()],
         fontWeight: FontWeight.w600,
         color: muted ? Theme.of(context).colorScheme.onSurfaceVariant.withValues(alpha: 0.6) : null,
       ),
@@ -29,8 +26,6 @@ class AmountText extends StatelessWidget {
   }
 }
 
-/// A label/amount line that never overlaps: the amount scales down on
-/// narrow screens instead of overflowing.
 class AmountRow extends StatelessWidget {
   const AmountRow({
     super.key,
@@ -75,20 +70,16 @@ class AmountRow extends StatelessWidget {
   }
 }
 
-/// Sales + per-currency payments for a period. Currencies are never combined.
 class SummaryBlock extends StatelessWidget {
   const SummaryBlock({
     super.key,
     required this.summary,
     this.showAllCurrencies = false,
-    // [تم التعديل] - ترجمة تسمية المبيعات الافتراضية
     this.salesLabel = 'المبيعات',
     this.emphasized = false,
   });
 
   final PeriodSummary summary;
-
-  /// Dashboard style: always show TRY, USD and SYP lines (zeros muted).
   final bool showAllCurrencies;
   final String salesLabel;
   final bool emphasized;
@@ -108,13 +99,11 @@ class SummaryBlock extends StatelessWidget {
           muted: summary.salesMinor == 0,
         ),
         const SizedBox(height: 6),
-        // [تم التعديل] - ترجمة "الدفعات"
         Text('الدفعات',
             style: t.labelLarge?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant)),
         if (currencies.isEmpty)
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 4),
-            // [تم التعديل] - ترجمة "لا توجد دفعات"
             child: Text('لا توجد دفعات',
                 style: t.bodyMedium
                     ?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant)),
@@ -122,7 +111,6 @@ class SummaryBlock extends StatelessWidget {
         else
           for (final c in currencies)
             AmountRow(
-              // [تم التعديل] - ترجمة تسمية دفعات العملة
               label: 'دفعات ${c.code}',
               minor: summary.payment(c),
               currency: c,
@@ -236,7 +224,6 @@ Future<bool> confirmDialog(
         title: Text(title),
         content: message == null ? null : SingleChildScrollView(child: Text(message)),
         actions: [
-          // [تم التعديل] - ترجمة زر الإلغاء
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('إلغاء')),
           FilledButton(
             style: destructive
@@ -261,7 +248,6 @@ void showMessage(BuildContext context, String message) {
   m?.showSnackBar(SnackBar(content: Text(message)));
 }
 
-/// "< September 2026 >" style period switcher.
 class PeriodSwitcher extends StatelessWidget {
   const PeriodSwitcher({
     super.key,
@@ -283,7 +269,6 @@ class PeriodSwitcher extends StatelessWidget {
     return Row(
       children: [
         IconButton.filledTonal(
-            // [تم التعديل] - ترجمة tooltip السابق
             tooltip: 'السابق', onPressed: onPrevious, icon: const Icon(Icons.chevron_left)),
         Expanded(
           child: TextButton(
@@ -306,7 +291,6 @@ class PeriodSwitcher extends StatelessWidget {
           ),
         ),
         IconButton.filledTonal(
-            // [تم التعديل] - ترجمة tooltip التالي
             tooltip: 'التالي', onPressed: canGoNext ? onNext : null, icon: const Icon(Icons.chevron_right)),
       ],
     );

@@ -2,164 +2,153 @@ import 'package:sqflite/sqflite.dart';
 
 import '../../core/currency.dart';
 import '../../core/dates.dart';
+import '../../data/models/ledger_transaction.dart';
 import '../../domain/validation.dart';
-import '../models/ledger_transaction.dart';
-
-class TransactionFilter {
-  const TransactionFilter({
-    this.query,
-    this.type,
-    this.from,
-    this.to,
-    this.currency,
-    this.warehouseId,
-  });
-
-  /// Matches warehouse name or invoice number.
-  final String? query;
-  final TransactionType? type;
-  final DateTime? from;
-  final DateTime? to;
-  final Currency? currency;
-  final int? warehouseId;
-}
 
 class TransactionRepository {
-  TransactionRepository(this._db, {this.onChanged, DateTime Function()? clock})
-      : _clock = clock ?? DateTime.now;
+  TransactionRepository(this._db, {required this.onChanged});
 
   final Database _db;
-  final void Function()? onChanged;
-  final DateTime Function() _clock;
+  final VoidCallback onChanged;
 
-  static const _select = '''
-    SELECT t.*, w.name AS warehouse_name
-    FROM transactions t
-    LEFT JOIN warehouses w ON w.id = t.warehouse_id
-  ''';
+  Future<List<LedgerTransaction>> all() async {
+    final rows = await _db.query('transactions', orderBy: 'transaction_date DESC, transaction_time DESC, id DESC');
+    return rows.map(_fromRow).toList();
+  }
 
-  Future<LedgerTransaction> insert(LedgerTransaction tx) async {
-    Validators.validateTransaction(tx);
-    final now = _clock().toIso8601String();
-    final id = await _db.transaction<int>((txn) async {
-      if (tx.isPayment) await _ensureWarehouse(txn, tx.warehouseId!);
-      return txn.insert('transactions', {
-        ...tx.toRow(),
-        'created_at': now,
-        'updated_at': now,
-      });
+  Future<List<LedgerTransaction>> onDay(DateTime day) async {
+    final key = Dates.key(day);
+    final rows = await _db.query(
+      'transactions',
+      where: 'transaction_date = ?',
+      whereArgs: [key],
+      orderBy: 'transaction_time DESC, id DESC',
+    );
+    return rows.map(_fromRow).toList();
+  }
+
+  Future<List<LedgerTransaction>> paymentsForWarehouse(int warehouseId) async {
+    final rows = await _db.query(
+      'transactions',
+      where: 'type = ? AND warehouse_id = ?',
+      whereArgs: ['PAYMENT', warehouseId],
+      orderBy: 'transaction_date DESC, transaction_time DESC, id DESC',
+    );
+    return rows.map(_fromRow).toList();
+  }
+
+  Future<int> insert(LedgerTransaction tx) async {
+    _validate(tx);
+    final now = DateTime.now().toIso8601String();
+    final id = await _db.insert('transactions', {
+      'type': tx.type.name.toUpperCase(),
+      'amount_minor': tx.amountMinor,
+      'currency': tx.currency.code,
+      'warehouse_id': tx.warehouseId,
+      'invoice_number': tx.invoiceNumber,
+      'note': tx.note,
+      'transaction_date': tx.date,
+      'transaction_time': tx.time,
+      'created_at': now,
+      'updated_at': now,
     });
-    onChanged?.call();
-    return (await byId(id))!;
+    onChanged();
+    return id;
   }
 
   Future<void> update(LedgerTransaction tx) async {
-    if (tx.id == null) throw ArgumentError('Cannot update a transaction without id');
-    Validators.validateTransaction(tx);
-    await _db.transaction((txn) async {
-      if (tx.isPayment) await _ensureWarehouse(txn, tx.warehouseId!);
-      final n = await txn.update(
-        'transactions',
-        {...tx.toRow(), 'updated_at': _clock().toIso8601String()},
-        where: 'id = ?',
-        whereArgs: [tx.id],
+    if (tx.id == null) throw ArgumentError('Cannot update unsaved transaction');
+    _validate(tx);
+    final now = DateTime.now().toIso8601String();
+    await _db.update(
+      'transactions',
+      {
+        'type': tx.type.name.toUpperCase(),
+        'amount_minor': tx.amountMinor,
+        'currency': tx.currency.code,
+        'warehouse_id': tx.warehouseId,
+        'invoice_number': tx.invoiceNumber,
+        'note': tx.note,
+        'transaction_date': tx.date,
+        'updated_at': now,
+      },
+      where: 'id = ?',
+      whereArgs: [tx.id],
+    );
+    
+    // [جديد] تحديث invoice_payments المرتبطة
+    if (tx.type == TransactionType.payment) {
+      await _db.update(
+        'invoice_payments',
+        {
+          'amount_minor': tx.amountMinor,
+          'currency_paid': tx.currency.code,
+          'updated_at': now,
+        },
+        where: 'note = ? AND invoice_id IN (SELECT id FROM invoices WHERE warehouse_id = ?)',
+        whereArgs: ['خصم تلقائي من دفعة', tx.warehouseId],
       );
-      if (n != 1) throw const ValidationException('This transaction no longer exists.');
-    });
-    onChanged?.call();
+    }
+    
+    onChanged();
   }
 
   Future<void> delete(int id) async {
+    // [جديد] حذف invoice_payments المرتبطة قبل حذف الـ transaction
+    final tx = await _db.query('transactions', where: 'id = ?', whereArgs: [id]);
+    if (tx.isNotEmpty) {
+      final row = tx.first;
+      if (row['type'] == 'PAYMENT') {
+        final warehouseId = row['warehouse_id'] as int?;
+        final amountMinor = row['amount_minor'] as int;
+        final currency = row['currency'] as String;
+        
+        // حذف الدفعات المرتبطة بنفس القيمة والعملة
+        if (warehouseId != null) {
+          await _db.delete(
+            'invoice_payments',
+            where: 'amount_minor = ? AND currency_paid = ? AND note = ? '
+                'AND invoice_id IN (SELECT id FROM invoices WHERE warehouse_id = ?)',
+            whereArgs: [amountMinor, currency, 'خصم تلقائي من دفعة', warehouseId],
+          );
+        }
+      }
+    }
+    
     await _db.delete('transactions', where: 'id = ?', whereArgs: [id]);
-    onChanged?.call();
+    onChanged();
   }
 
-  Future<LedgerTransaction?> byId(int id) async {
-    final rows = await _db.rawQuery('$_select WHERE t.id = ? LIMIT 1', [id]);
-    return rows.isEmpty ? null : LedgerTransaction.fromMap(rows.first);
-  }
-
-  /// All transactions of one day (a single day is always small).
-  Future<List<LedgerTransaction>> forDay(DateTime day, {TransactionType? type}) async {
-    final args = <Object?>[Dates.key(day)];
-    var where = 't.transaction_date = ?';
-    if (type != null) {
-      where += ' AND t.type = ?';
-      args.add(type.code);
+  void _validate(LedgerTransaction tx) {
+    if (tx.amountMinor <= 0) throw const ValidationException('Amount must be positive');
+    if (tx.type == TransactionType.sale) {
+      if (tx.currency != Currency.salesCurrency) {
+        throw const ValidationException('Sales must be in TRY');
+      }
+      if (tx.warehouseId != null) {
+        throw const ValidationException('Sales cannot be linked to warehouses');
+      }
+    } else {
+      if (tx.warehouseId == null) {
+        throw const ValidationException('Payments must be linked to a warehouse');
+      }
     }
-    final rows = await _db.rawQuery(
-        '$_select WHERE $where ORDER BY t.transaction_time ASC, t.id ASC', args);
-    return rows.map(LedgerTransaction.fromMap).toList();
   }
 
-  /// Paginated search, newest first.
-  Future<List<LedgerTransaction>> search(
-    TransactionFilter f, {
-    int limit = 50,
-    int offset = 0,
-  }) async {
-    final (where, args) = _where(f);
-    final rows = await _db.rawQuery(
-      '$_select $where ORDER BY t.transaction_date DESC, t.transaction_time DESC, t.id DESC '
-      'LIMIT ? OFFSET ?',
-      [...args, limit, offset],
+  LedgerTransaction _fromRow(Map<String, dynamic> row) {
+    final type = row['type'] == 'SALE' ? TransactionType.sale : TransactionType.payment;
+    return LedgerTransaction(
+      id: row['id'] as int,
+      type: type,
+      amountMinor: row['amount_minor'] as int,
+      currency: Currency.fromCode(row['currency'] as String),
+      warehouseId: row['warehouse_id'] as int?,
+      invoiceNumber: row['invoice_number'] as String?,
+      note: row['note'] as String?,
+      date: row['transaction_date'] as String,
+      time: row['transaction_time'] as String,
     );
-    return rows.map(LedgerTransaction.fromMap).toList();
   }
-
-  /// Per-currency totals of everything matching [f] (never combined).
-  Future<Map<Currency, int>> totalsByCurrency(TransactionFilter f) async {
-    final (where, args) = _where(f);
-    final rows = await _db.rawQuery('''
-      SELECT t.currency AS currency, SUM(t.amount_minor) AS total
-      FROM transactions t LEFT JOIN warehouses w ON w.id = t.warehouse_id
-      $where GROUP BY t.currency
-    ''', args);
-    return {
-      for (final r in rows) Currency.fromCode(r['currency'] as String): r['total'] as int,
-    };
-  }
-
-  (String, List<Object?>) _where(TransactionFilter f) {
-    final clauses = <String>[];
-    final args = <Object?>[];
-    if (f.type != null) {
-      clauses.add('t.type = ?');
-      args.add(f.type!.code);
-    }
-    if (f.from != null) {
-      clauses.add('t.transaction_date >= ?');
-      args.add(Dates.key(f.from!));
-    }
-    if (f.to != null) {
-      clauses.add('t.transaction_date <= ?');
-      args.add(Dates.key(f.to!));
-    }
-    if (f.currency != null) {
-      clauses.add('t.currency = ?');
-      args.add(f.currency!.code);
-    }
-    if (f.warehouseId != null) {
-      clauses.add('t.warehouse_id = ?');
-      args.add(f.warehouseId);
-    }
-    final q = f.query?.trim().toLowerCase() ?? '';
-    if (q.isNotEmpty) {
-      final like = '%${_escapeLike(q)}%';
-      clauses.add("(w.name_key LIKE ? ESCAPE '\\' OR LOWER(t.invoice_number) LIKE ? ESCAPE '\\')");
-      args
-        ..add(like)
-        ..add(like);
-    }
-    return (clauses.isEmpty ? '' : 'WHERE ${clauses.join(' AND ')}', args);
-  }
-
-  Future<void> _ensureWarehouse(Transaction txn, int warehouseId) async {
-    final r = await txn.query('warehouses',
-        columns: ['id'], where: 'id = ?', whereArgs: [warehouseId], limit: 1);
-    if (r.isEmpty) throw const ValidationException(Messages.selectWarehouse);
-  }
-
-  static String _escapeLike(String s) =>
-      s.replaceAll('\\', '\\\\').replaceAll('%', '\\%').replaceAll('_', '\\_');
 }
+
+typedef VoidCallback = void Function();

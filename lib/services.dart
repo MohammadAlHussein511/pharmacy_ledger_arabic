@@ -39,7 +39,10 @@ class AppServices {
 
   static Future<AppServices> create() async {
     const secure = FlutterSecureStorage(
-      aOptions: AndroidOptions(encryptedSharedPreferences: true),
+      aOptions: AndroidOptions(
+        encryptedSharedPreferences: false,
+        resetOnError:true,      
+      ),
     );
     final prefs = await SharedPreferences.getInstance();
     final db = await AppDatabase.open();

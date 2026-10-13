@@ -35,7 +35,6 @@ class BackupMessages {
       'تعذّرت استعادة النسخة الاحتياطية. لم يتم تغيير بياناتك الحالية.';
 }
 
-/// Validated, ready-to-restore backup content.
 class BackupPreview {
   const BackupPreview({
     required this.createdAt,
@@ -43,6 +42,10 @@ class BackupPreview {
     required this.encrypted,
     required this.warehouses,
     required this.transactions,
+    this.invoices = const [],
+    this.invoicePayments = const [],
+    this.pharmacyDebts = const [],
+    this.pharmacyDebtEntries = const [],
   });
 
   final DateTime? createdAt;
@@ -50,16 +53,19 @@ class BackupPreview {
   final bool encrypted;
   final List<Map<String, Object?>> warehouses;
   final List<Map<String, Object?>> transactions;
+  final List<Map<String, Object?>> invoices;
+  final List<Map<String, Object?>> invoicePayments;
+  final List<Map<String, Object?>> pharmacyDebts;
+  final List<Map<String, Object?>> pharmacyDebtEntries;
 
   int get warehouseCount => warehouses.length;
   int get transactionCount => transactions.length;
+  int get invoiceCount => invoices.length;
+  int get invoicePaymentCount => invoicePayments.length;
+  int get pharmacyDebtCount => pharmacyDebts.length;
+  int get pharmacyDebtEntryCount => pharmacyDebtEntries.length;
 }
 
-/// JSON backup with a SHA-256 integrity checksum, optionally encrypted with
-/// AES-256-GCM using a key derived from a user password (PBKDF2-SHA256).
-///
-/// Restore is all-or-nothing: the replacement happens inside a single SQLite
-/// transaction, so any failure rolls back and the current data is untouched.
 class BackupService {
   BackupService(this._db, {this.kdfIterations = 150000, DateTime Function()? clock})
       : _clock = clock ?? DateTime.now;
@@ -69,13 +75,27 @@ class BackupService {
   final DateTime Function() _clock;
 
   static const String format = 'pharmacy-ledger-backup';
-  static const int formatVersion = 1;
+  static const int formatVersion = 2;  // [تم التحديث] من 1 إلى 2
   static const int maxBytes = 200 * 1024 * 1024;
 
   static const _whCols = ['id', 'name', 'name_key', 'is_active', 'created_at', 'updated_at'];
   static const _txCols = [
     'id', 'type', 'amount_minor', 'currency', 'warehouse_id', 'invoice_number', 'note',
     'transaction_date', 'transaction_time', 'created_at', 'updated_at',
+  ];
+  static const _invCols = [
+    'id', 'warehouse_id', 'currency', 'amount_minor', 'paid_minor',
+    'exchange_rate', 'note', 'invoice_date', 'created_at', 'updated_at',
+  ];
+  static const _invPayCols = [
+    'id', 'invoice_id', 'amount_minor', 'currency_paid',
+    'exchange_rate', 'note', 'payment_date', 'payment_time',
+    'created_at', 'updated_at',
+  ];
+  static const _pdCols = ['id', 'name', 'name_key', 'created_at', 'updated_at'];
+  static const _pdeCols = [
+    'id', 'pharmacy_id', 'direction', 'amount_minor', 'currency',
+    'note', 'entry_date', 'entry_time', 'created_at', 'updated_at',
   ];
 
   String suggestedFileName() {
@@ -84,12 +104,22 @@ class BackupService {
     return 'pharmacy-ledger-backup-${Dates.key(n)}-${two(n.hour)}${two(n.minute)}.json';
   }
 
-  // ------------------------------------------------------------------ create
-
   Future<Uint8List> createBackup({String? password}) async {
     final warehouses = await _db.query('warehouses', columns: _whCols, orderBy: 'id');
     final transactions = await _db.query('transactions', columns: _txCols, orderBy: 'id');
-    final data = {'warehouses': warehouses, 'transactions': transactions};
+    final invoices = await _db.query('invoices', columns: _invCols, orderBy: 'id');
+    final invoicePayments = await _db.query('invoice_payments', columns: _invPayCols, orderBy: 'id');
+    final pharmacyDebts = await _db.query('pharmacy_debts', columns: _pdCols, orderBy: 'id');
+    final pharmacyDebtEntries = await _db.query('pharmacy_debt_entries', columns: _pdeCols, orderBy: 'id');
+
+    final data = {
+      'warehouses': warehouses,
+      'transactions': transactions,
+      'invoices': invoices,
+      'invoice_payments': invoicePayments,
+      'pharmacy_debts': pharmacyDebts,
+      'pharmacy_debt_entries': pharmacyDebtEntries,
+    };
     final dataJson = jsonEncode(data);
     final checksum = sha256.convert(utf8.encode(dataJson)).toString();
 
@@ -99,7 +129,14 @@ class BackupService {
       'schema_version': AppDatabase.schemaVersion,
       'app_version': AppInfo.version,
       'created_at': _clock().toIso8601String(),
-      'counts': {'warehouses': warehouses.length, 'transactions': transactions.length},
+      'counts': {
+        'warehouses': warehouses.length,
+        'transactions': transactions.length,
+        'invoices': invoices.length,
+        'invoice_payments': invoicePayments.length,
+        'pharmacy_debts': pharmacyDebts.length,
+        'pharmacy_debt_entries': pharmacyDebtEntries.length,
+      },
       'checksum_sha256': checksum,
     };
 
@@ -128,9 +165,6 @@ class BackupService {
     return Uint8List.fromList(utf8.encode(const JsonEncoder.withIndent(' ').convert(envelope)));
   }
 
-  // ------------------------------------------------------------- validation
-
-  /// Parses and fully validates a backup file WITHOUT touching the database.
   Future<BackupPreview> inspect(List<int> bytes, {String? password}) async {
     if (bytes.length > maxBytes) throw const BackupException(BackupMessages.tooLarge);
     Map<String, dynamic> env;
@@ -165,6 +199,10 @@ class BackupService {
     final data = jsonDecode(dataJson) as Map<String, dynamic>;
     final whs = _rows(data['warehouses'], _whCols);
     final txs = _rows(data['transactions'], _txCols);
+    final invs = _rowsOpt(data['invoices'], _invCols);
+    final invPays = _rowsOpt(data['invoice_payments'], _invPayCols);
+    final pds = _rowsOpt(data['pharmacy_debts'], _pdCols);
+    final pdes = _rowsOpt(data['pharmacy_debt_entries'], _pdeCols);
     _validateRows(whs, txs);
 
     return BackupPreview(
@@ -173,6 +211,10 @@ class BackupService {
       encrypted: encrypted,
       warehouses: whs,
       transactions: txs,
+      invoices: invs,
+      invoicePayments: invPays,
+      pharmacyDebts: pds,
+      pharmacyDebtEntries: pdes,
     );
   }
 
@@ -183,8 +225,8 @@ class BackupService {
       final key = await _deriveKey(password, salt, enc['iterations'] as int);
       final box = SecretBox(
         base64Decode(env['payload'] as String),
-        nonce: base64Decode(enc['nonce'] as String),
-        mac: Mac(base64Decode(enc['mac'] as String)),
+        nonce: base64Decode(env['nonce'] as String),
+        mac: Mac(base64Decode(env['mac'] as String)),
       );
       final clear = await AesGcm.with256bits().decrypt(box, secretKey: SecretKey(key));
       return utf8.decode(clear);
@@ -203,6 +245,16 @@ class BackupService {
           {for (final c in cols) c: r[c]}
         else
           throw const BackupException(BackupMessages.corrupted),
+    ];
+  }
+
+  /// مثل _rows لكنها تُعيد قائمة فارغة إذا كان الحقل غير موجود (دعم النسخ القديمة)
+  List<Map<String, Object?>> _rowsOpt(Object? list, List<String> cols) {
+    if (list == null) return <Map<String, Object?>>[];
+    if (list is! List) return <Map<String, Object?>>[];
+    return [
+      for (final r in list)
+        if (r is Map<String, dynamic>) {for (final c in cols) c: r[c]},
     ];
   }
 
@@ -250,20 +302,35 @@ class BackupService {
     }
   }
 
-  // ----------------------------------------------------------------- restore
-
-  /// Replaces ALL current data with the backup, atomically.
   Future<void> restore(BackupPreview preview) async {
     try {
       await _db.transaction((txn) async {
+        // ترتيب الحذف مهم بسبب foreign keys
+        await txn.delete('pharmacy_debt_entries');
+        await txn.delete('pharmacy_debts');
+        await txn.delete('invoice_payments');
+        await txn.delete('invoices');
         await txn.delete('transactions');
         await txn.delete('warehouses');
+
         final batch = txn.batch();
         for (final w in preview.warehouses) {
           batch.insert('warehouses', w, conflictAlgorithm: ConflictAlgorithm.abort);
         }
         for (final t in preview.transactions) {
           batch.insert('transactions', t, conflictAlgorithm: ConflictAlgorithm.abort);
+        }
+        for (final i in preview.invoices) {
+          batch.insert('invoices', i, conflictAlgorithm: ConflictAlgorithm.abort);
+        }
+        for (final p in preview.invoicePayments) {
+          batch.insert('invoice_payments', p, conflictAlgorithm: ConflictAlgorithm.abort);
+        }
+        for (final pd in preview.pharmacyDebts) {
+          batch.insert('pharmacy_debts', pd, conflictAlgorithm: ConflictAlgorithm.abort);
+        }
+        for (final pe in preview.pharmacyDebtEntries) {
+          batch.insert('pharmacy_debt_entries', pe, conflictAlgorithm: ConflictAlgorithm.abort);
         }
         await batch.commit(noResult: true);
       });

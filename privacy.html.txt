@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>سياسة الخصوصية - دفتر الصيدلية</title>
+</head>
+<body style="font-family:system-ui;padding:40px;max-width:700px;margin:auto">
+<h1>سياسة الخصوصية — تطبيق دفتر الصيدلية</h1>
+<ul>
+<li>يستخدم التطبيق حساب Google فقط للحصول على الاسم والبريد الإلكتروني لغرض تسجيل الدخول وتحديد هوية المستخدم.</li>
+<li>البيانات التي يدخلها المستخدم (المبيعات، المدفوعات، المستودعات) تُخزَّن بأمان على خوادم Supabase ولا تُشارك مع أي طرف ثالث.</li>
+<li>لا يحتوي التطبيق إعلانات ولا يبيع أي بيانات.</li>
+<li>يمكن حذف البيانات نهائياً في أي وقت من داخل التطبيق أو بمراسلة البريد أدناه.</li>
+<li>للتواصل: mohammadalalhussien29@gmail.com</li>
+</ul>
+<h2>Privacy Policy (English)</h2>
+<ul>
+<li>The app uses Google sign-in solely to obtain your name and email for authentication.</li>
+<li>User-entered data (sales, payments, warehouses) is stored securely on Supabase servers and never shared with third parties.</li>
+<li>The app contains no ads and sells no data.</li>
+<li>You may delete your data at any time from within the app or by contacting the email below.</li>
+<li>Contact: mohammadalalhussien29@gmail.com</li>
+</ul>
+</body>
+</html>
