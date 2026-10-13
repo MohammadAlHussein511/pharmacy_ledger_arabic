@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-
 import '../../services.dart';
 import '../../sync/auto_sync.dart';
 import 'accounts_screen.dart';
@@ -11,7 +10,7 @@ import 'today_screen.dart';
 import 'warehouses_screen.dart';
 import 'weeks_screen.dart';
 
-/// 8 تبويبات مع سكرول جانبي: الرئيسية، اليوم، الأسابيع، المستودعات، التقارير، الحسابات، الإعدادات، المزيد
+/// 7 تبويبات: الرئيسية، اليوم، الحسابات، المستودعات، الأسابيع، التقارير، الإعدادات
 class HomeShell extends StatefulWidget {
   const HomeShell({super.key});
 
@@ -30,7 +29,7 @@ class HomeShellState extends State<HomeShell> with SingleTickerProviderStateMixi
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 8, vsync: this);
+    _tabController = TabController(length: 7, vsync: this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       _autoSync = AutoSync(context.read<AppServices>())..start();
@@ -52,7 +51,7 @@ class HomeShellState extends State<HomeShell> with SingleTickerProviderStateMixi
 
   void openReports(ReportTab tab) {
     setState(() {
-      _tabController.index = 4; // التقارير
+      _tabController.index = 5; // التقارير
     });
     WidgetsBinding.instance
         .addPostFrameCallback((_) => _reportsKey.currentState?.show(tab));
@@ -75,12 +74,11 @@ class HomeShellState extends State<HomeShell> with SingleTickerProviderStateMixi
           children: [
             const HomeScreen(),
             const TodayScreen(),
-            const WeeksScreen(),
-            const WarehousesScreen(standalone: true),
-            ReportsScreen(key: _reportsKey),
             const AccountsScreen(),
+            const WarehousesScreen(standalone: true),
+            const WeeksScreen(),
+            ReportsScreen(key: _reportsKey),
             const SettingsScreen(),
-            const _MoreScreen(),
           ],
         ),
         bottomNavigationBar: Material(
@@ -94,47 +92,14 @@ class HomeShellState extends State<HomeShell> with SingleTickerProviderStateMixi
             tabs: const [
               Tab(icon: Icon(Icons.dashboard_outlined), text: 'الرئيسية'),
               Tab(icon: Icon(Icons.today_outlined), text: 'اليوم'),
-              Tab(icon: Icon(Icons.calendar_month_outlined), text: 'الأسابيع'),
-              Tab(icon: Icon(Icons.warehouse_outlined), text: 'المستودعات'),
-              Tab(icon: Icon(Icons.bar_chart_outlined), text: 'التقارير'),
               Tab(icon: Icon(Icons.account_balance_wallet_outlined), text: 'الحسابات'),
+              Tab(icon: Icon(Icons.warehouse_outlined), text: 'المستودعات'),
+              Tab(icon: Icon(Icons.calendar_month_outlined), text: 'الأسابيع'),
+              Tab(icon: Icon(Icons.bar_chart_outlined), text: 'التقارير'),
               Tab(icon: Icon(Icons.settings_outlined), text: 'الإعدادات'),
-              Tab(icon: Icon(Icons.more_horiz), text: 'المزيد'),
             ],
           ),
         ),
-      ),
-    );
-  }
-}
-
-class _MoreScreen extends StatelessWidget {
-  const _MoreScreen();
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('المزيد')),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          Card(
-            child: ListTile(
-              leading: const Icon(Icons.info_outline),
-              title: const Text('عن التطبيق'),
-              subtitle: const Text('الإصدار 2.0.0'),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () {
-                showAboutDialog(
-                  context: context,
-                  applicationName: 'دفتر الصيدلية',
-                  applicationVersion: '2.0.0',
-                  applicationLegalese: '© 2026',
-                );
-              },
-            ),
-          ),
-        ],
       ),
     );
   }

@@ -1,8 +1,6 @@
 import 'dart:convert';
-
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-
 import '../../services.dart';
 import 'pharmacy_debt_detail_screen.dart';
 import 'pharmacy_debt_form_screen.dart';
@@ -16,6 +14,7 @@ class PharmacyDebtsScreen extends StatefulWidget {
 
 class _PhRow {
   _PhRow({required this.id, required this.name});
+
   final int id;
   final String name;
   int toUs = 0;
@@ -36,20 +35,30 @@ class _PharmacyDebtsScreenState extends State<PharmacyDebtsScreen> {
     setState(() => _loading = true);
     try {
       final services = context.read<AppServices>();
+      
+      // إضافة حقل settled_at إذا لم يكن موجوداً
+      try {
+        await services.db.execute('ALTER TABLE pharmacy_debt_entries ADD COLUMN settled_at TEXT');
+      } catch (e) {
+        // الحقل موجود مسبقاً
+      }
+
       final bytes = await services.backup.createBackup();
       final env = jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>;
       final data = env['data'] as Map<String, dynamic>;
-      final phs = (data['pharmacy_debts'] as List? ?? [])
-          .cast<Map<String, dynamic>>();
-      final entries = (data['pharmacy_debt_entries'] as List? ?? [])
-          .cast<Map<String, dynamic>>();
+      final phs = (data['pharmacy_debts'] as List? ?? []).cast<Map<String, dynamic>>();
+      final entries = (data['pharmacy_debt_entries'] as List? ?? []).cast<Map<String, dynamic>>();
 
       final map = <int, _PhRow>{};
       for (final p in phs) {
-        map[p['id'] as int] =
-            _PhRow(id: p['id'] as int, name: p['name'] as String);
+        map[p['id'] as int] = _PhRow(id: p['id'] as int, name: p['name'] as String);
       }
+
       for (final e in entries) {
+        // استثناء الحركات المسددة
+        final settledAt = e['settled_at'] as String?;
+        if (settledAt != null) continue;
+
         final ph = map[e['pharmacy_id'] as int];
         if (ph == null) continue;
         if (e['direction'] == 'OWED_TO_US') {
@@ -58,8 +67,9 @@ class _PharmacyDebtsScreenState extends State<PharmacyDebtsScreen> {
           ph.byUs++;
         }
       }
-      final list = map.values.toList()
-        ..sort((a, b) => a.name.compareTo(b.name));
+
+      final list = map.values.toList()..sort((a, b) => a.name.compareTo(b.name));
+
       if (!mounted) return;
       setState(() {
         _rows = list;
@@ -77,6 +87,7 @@ class _PharmacyDebtsScreenState extends State<PharmacyDebtsScreen> {
   @override
   Widget build(BuildContext context) {
     final t = Theme.of(context).textTheme;
+
     return Scaffold(
       body: _loading
           ? const Center(child: CircularProgressIndicator())
@@ -95,12 +106,10 @@ class _PharmacyDebtsScreenState extends State<PharmacyDebtsScreen> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text('لنا عند الصيدليات',
-                                  style: t.bodySmall
-                                      ?.copyWith(color: Colors.green.shade700)),
+                                  style: t.bodySmall?.copyWith(color: Colors.green.shade700)),
                               const SizedBox(height: 4),
                               Text('$_totalToUs صنف',
-                                  style: t.titleMedium
-                                      ?.copyWith(color: Colors.green.shade900)),
+                                  style: t.titleMedium?.copyWith(color: Colors.green.shade900)),
                             ],
                           ),
                         ),
@@ -116,12 +125,10 @@ class _PharmacyDebtsScreenState extends State<PharmacyDebtsScreen> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text('علينا للصيدليات',
-                                  style: t.bodySmall
-                                      ?.copyWith(color: Colors.red.shade700)),
+                                  style: t.bodySmall?.copyWith(color: Colors.red.shade700)),
                               const SizedBox(height: 4),
                               Text('$_totalByUs صنف',
-                                  style: t.titleMedium
-                                      ?.copyWith(color: Colors.red.shade900)),
+                                  style: t.titleMedium?.copyWith(color: Colors.red.shade900)),
                             ],
                           ),
                         ),
@@ -140,18 +147,15 @@ class _PharmacyDebtsScreenState extends State<PharmacyDebtsScreen> {
                     ..._rows.map((r) => Card(
                           margin: const EdgeInsets.symmetric(vertical: 4),
                           child: ListTile(
-                            leading: const CircleAvatar(
-                                child: Icon(Icons.local_pharmacy_outlined)),
+                            leading: const CircleAvatar(child: Icon(Icons.local_pharmacy_outlined)),
                             title: Text(r.name),
-                            subtitle: Text(
-                                'لنا: ${r.toUs} صنف · علينا: ${r.byUs} صنف'),
+                            subtitle: Text('لنا: ${r.toUs} صنف · علينا: ${r.byUs} صنف'),
                             trailing: const Icon(Icons.chevron_right),
                             onTap: () async {
                               await Navigator.push(
                                 context,
                                 MaterialPageRoute(
-                                    builder: (_) => PharmacyDebtDetailScreen(
-                                        pharmacyId: r.id)),
+                                    builder: (_) => PharmacyDebtDetailScreen(pharmacyId: r.id)),
                               );
                               _load();
                             },

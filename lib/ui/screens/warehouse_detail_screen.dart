@@ -18,6 +18,7 @@ typedef _Detail = ({Warehouse? warehouse, WarehouseTotals totals});
 
 class WarehouseDetailScreen extends StatelessWidget {
   const WarehouseDetailScreen({super.key, required this.warehouseId});
+
   final int warehouseId;
 
   @override
@@ -48,8 +49,8 @@ class WarehouseDetailScreen extends StatelessWidget {
                   // [تم التعديل] - ترجمة خيارات قائمة المستودع
                   const PopupMenuItem(value: 'rename', child: Text('إعادة تسمية')),
                   PopupMenuItem(
-                      value: 'toggle',
-                      child: Text(w.isActive ? 'تعطيل المستودع' : 'إعادة تفعيل المستودع')),
+                    value: 'toggle',
+                    child: Text(w.isActive ? 'تعطيل المستودع' : 'إعادة تفعيل المستودع')),
                   if (d.totals.paymentCount == 0)
                     const PopupMenuItem(value: 'delete', child: Text('حذف المستودع')),
                 ],

@@ -1,9 +1,26 @@
 import 'package:sqflite/sqflite.dart';
-
 import '../../core/currency.dart';
 import '../../core/dates.dart';
 import '../../data/models/ledger_transaction.dart';
 import '../../domain/validation.dart';
+
+class TransactionFilter {
+  final TransactionType? type;
+  final String? query;
+  final DateTime? from;
+  final DateTime? to;
+  final Currency? currency;
+  final int? warehouseId;
+
+  const TransactionFilter({
+    this.type,
+    this.query,
+    this.from,
+    this.to,
+    this.currency,
+    this.warehouseId,
+  });
+}
 
 class TransactionRepository {
   TransactionRepository(this._db, {required this.onChanged});
@@ -37,6 +54,101 @@ class TransactionRepository {
     return rows.map(_fromRow).toList();
   }
 
+  Future<List<LedgerTransaction>> search(TransactionFilter filter, {int limit = 50, int offset = 0}) async {
+    final whereClauses = <String>[];
+    final args = <dynamic>[];
+
+    if (filter.type != null) {
+      whereClauses.add('t.type = ?');
+      args.add(filter.type!.code.toUpperCase());
+    }
+    if (filter.warehouseId != null) {
+      whereClauses.add('t.warehouse_id = ?');
+      args.add(filter.warehouseId);
+    }
+    if (filter.currency != null) {
+      whereClauses.add('t.currency = ?');
+      args.add(filter.currency!.code);
+    }
+    if (filter.from != null) {
+      whereClauses.add('t.transaction_date >= ?');
+      args.add(Dates.key(filter.from!));
+    }
+    if (filter.to != null) {
+      whereClauses.add('t.transaction_date <= ?');
+      args.add(Dates.key(filter.to!));
+    }
+    if (filter.query != null && filter.query!.isNotEmpty) {
+      whereClauses.add('(t.invoice_number LIKE ? OR t.note LIKE ? OR w.name LIKE ?)');
+      args.add('%${filter.query}%');
+      args.add('%${filter.query}%');
+      args.add('%${filter.query}%');
+    }
+
+    final whereStr = whereClauses.isNotEmpty ? whereClauses.join(' AND ') : null;
+    final sql = '''
+      SELECT t.*, w.name as warehouse_name FROM transactions t
+      LEFT JOIN warehouses w ON t.warehouse_id = w.id
+      ${whereStr != null ? 'WHERE $whereStr' : ''}
+      ORDER BY t.transaction_date DESC, t.transaction_time DESC, t.id DESC
+      LIMIT ? OFFSET ?
+    ''';
+    args.add(limit);
+    args.add(offset);
+
+    final rows = await _db.rawQuery(sql, args);
+    return rows.map(_fromRow).toList();
+  }
+
+  Future<Map<Currency, int>> totalsByCurrency(TransactionFilter filter) async {
+    final whereClauses = <String>[];
+    final args = <dynamic>[];
+
+    if (filter.type != null) {
+      whereClauses.add('t.type = ?');
+      args.add(filter.type!.code.toUpperCase());
+    }
+    if (filter.warehouseId != null) {
+      whereClauses.add('t.warehouse_id = ?');
+      args.add(filter.warehouseId);
+    }
+    if (filter.currency != null) {
+      whereClauses.add('t.currency = ?');
+      args.add(filter.currency!.code);
+    }
+    if (filter.from != null) {
+      whereClauses.add('t.transaction_date >= ?');
+      args.add(Dates.key(filter.from!));
+    }
+    if (filter.to != null) {
+      whereClauses.add('t.transaction_date <= ?');
+      args.add(Dates.key(filter.to!));
+    }
+    if (filter.query != null && filter.query!.isNotEmpty) {
+      whereClauses.add('(t.invoice_number LIKE ? OR t.note LIKE ? OR w.name LIKE ?)');
+      args.add('%${filter.query}%');
+      args.add('%${filter.query}%');
+      args.add('%${filter.query}%');
+    }
+
+    final whereStr = whereClauses.isNotEmpty ? whereClauses.join(' AND ') : null;
+    final sql = '''
+      SELECT t.currency, SUM(t.amount_minor) as total
+      FROM transactions t
+      LEFT JOIN warehouses w ON t.warehouse_id = w.id
+      ${whereStr != null ? 'WHERE $whereStr' : ''}
+      GROUP BY t.currency
+    ''';
+
+    final rows = await _db.rawQuery(sql, args);
+    final totals = <Currency, int>{};
+    for (final row in rows) {
+      final c = Currency.fromCode(row['currency'] as String);
+      totals[c] = (row['total'] as num).toInt();
+    }
+    return totals;
+  }
+
   Future<int> insert(LedgerTransaction tx) async {
     _validate(tx);
     final now = DateTime.now().toIso8601String();
@@ -60,6 +172,7 @@ class TransactionRepository {
     if (tx.id == null) throw ArgumentError('Cannot update unsaved transaction');
     _validate(tx);
     final now = DateTime.now().toIso8601String();
+    
     await _db.update(
       'transactions',
       {
@@ -75,8 +188,8 @@ class TransactionRepository {
       where: 'id = ?',
       whereArgs: [tx.id],
     );
-    
-    // [جديد] تحديث invoice_payments المرتبطة
+
+    // جديد: تحديث invoice_payments المرتبطة باستخدام transaction_id
     if (tx.type == TransactionType.payment) {
       await _db.update(
         'invoice_payments',
@@ -85,35 +198,17 @@ class TransactionRepository {
           'currency_paid': tx.currency.code,
           'updated_at': now,
         },
-        where: 'note = ? AND invoice_id IN (SELECT id FROM invoices WHERE warehouse_id = ?)',
-        whereArgs: ['خصم تلقائي من دفعة', tx.warehouseId],
+        where: 'transaction_id = ?',
+        whereArgs: [tx.id],
       );
     }
-    
+
     onChanged();
   }
 
   Future<void> delete(int id) async {
-    // [جديد] حذف invoice_payments المرتبطة قبل حذف الـ transaction
-    final tx = await _db.query('transactions', where: 'id = ?', whereArgs: [id]);
-    if (tx.isNotEmpty) {
-      final row = tx.first;
-      if (row['type'] == 'PAYMENT') {
-        final warehouseId = row['warehouse_id'] as int?;
-        final amountMinor = row['amount_minor'] as int;
-        final currency = row['currency'] as String;
-        
-        // حذف الدفعات المرتبطة بنفس القيمة والعملة
-        if (warehouseId != null) {
-          await _db.delete(
-            'invoice_payments',
-            where: 'amount_minor = ? AND currency_paid = ? AND note = ? '
-                'AND invoice_id IN (SELECT id FROM invoices WHERE warehouse_id = ?)',
-            whereArgs: [amountMinor, currency, 'خصم تلقائي من دفعة', warehouseId],
-          );
-        }
-      }
-    }
+    // جديد: حذف invoice_payments المرتبطة باستخدام transaction_id
+    await _db.delete('invoice_payments', where: 'transaction_id = ?', whereArgs: [id]);
     
     await _db.delete('transactions', where: 'id = ?', whereArgs: [id]);
     onChanged();
@@ -143,6 +238,7 @@ class TransactionRepository {
       amountMinor: row['amount_minor'] as int,
       currency: Currency.fromCode(row['currency'] as String),
       warehouseId: row['warehouse_id'] as int?,
+      warehouseName: row['warehouse_name'] as String?,
       invoiceNumber: row['invoice_number'] as String?,
       note: row['note'] as String?,
       date: row['transaction_date'] as String,

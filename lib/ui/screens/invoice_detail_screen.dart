@@ -1,8 +1,6 @@
 import 'dart:convert';
-
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-
 import '../../services.dart';
 import 'invoice_form_screen.dart';
 import 'payment_form_screen.dart';
@@ -24,7 +22,9 @@ class _Payment {
     required this.date,
     required this.time,
     required this.equivalentInInvoiceCurrency,
+    required this.transactionId,
   });
+
   final int id;
   final int amountMinor;
   final String currencyPaid;
@@ -32,6 +32,7 @@ class _Payment {
   final String date;
   final String time;
   final int equivalentInInvoiceCurrency;
+  final int? transactionId;
 }
 
 String _money(int minor, String cur) => '${(minor / 100).toStringAsFixed(2)} $cur';
@@ -52,6 +53,14 @@ class _InvoiceDetailScreenState extends State<InvoiceDetailScreen> {
     setState(() => _loading = true);
     try {
       final services = context.read<AppServices>();
+      
+      // إضافة حقل transaction_id إذا لم يكن موجوداً
+      try {
+        await services.db.execute('ALTER TABLE invoice_payments ADD COLUMN transaction_id INTEGER');
+      } catch (e) {
+        // الحقل موجود مسبقاً
+      }
+
       final bytes = await services.backup.createBackup();
       final env = jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>;
       final data = env['data'] as Map<String, dynamic>;
@@ -65,6 +74,7 @@ class _InvoiceDetailScreenState extends State<InvoiceDetailScreen> {
         setState(() => _loading = false);
         return;
       }
+
       final wid = inv['warehouse_id'] as int;
       final whName = whs.firstWhere((w) => w['id'] == wid, orElse: () => {'name': 'مستودع محذوف'})['name'] as String;
       final invCur = inv['currency'] as String;
@@ -77,6 +87,7 @@ class _InvoiceDetailScreenState extends State<InvoiceDetailScreen> {
         final paidCur = p['currency_paid'] as String;
         final amount = p['amount_minor'] as int;
         final rate = (p['exchange_rate'] as num?)?.toDouble();
+
         int equivalent;
         if (paidCur == invCur) {
           equivalent = amount;
@@ -85,6 +96,7 @@ class _InvoiceDetailScreenState extends State<InvoiceDetailScreen> {
         } else {
           equivalent = amount;
         }
+
         payments.add(_Payment(
           id: p['id'] as int,
           amountMinor: amount,
@@ -93,6 +105,7 @@ class _InvoiceDetailScreenState extends State<InvoiceDetailScreen> {
           date: p['payment_date'] as String,
           time: p['payment_time'] as String,
           equivalentInInvoiceCurrency: equivalent,
+          transactionId: p['transaction_id'] as int?,
         ));
       }
 
@@ -126,17 +139,30 @@ class _InvoiceDetailScreenState extends State<InvoiceDetailScreen> {
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('إلغاء')),
           FilledButton(
-              style: FilledButton.styleFrom(backgroundColor: Theme.of(ctx).colorScheme.error),
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('حذف')),
+            style: FilledButton.styleFrom(backgroundColor: Theme.of(ctx).colorScheme.error),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('حذف')),
         ],
       ),
     );
+
     if (ok != true || !mounted) return;
+
     final services = context.read<AppServices>();
+    
+    // جديد: حذف الدفعات من transactions أيضاً
+    final pays = await services.db.query('invoice_payments', where: 'invoice_id = ?', whereArgs: [widget.invoiceId]);
+    for (final p in pays) {
+      final txId = p['transaction_id'] as int?;
+      if (txId != null) {
+        await services.db.delete('transactions', where: 'id = ?', whereArgs: [txId]);
+      }
+    }
+
     await services.db.delete('invoice_payments', where: 'invoice_id = ?', whereArgs: [widget.invoiceId]);
     await services.db.delete('invoices', where: 'id = ?', whereArgs: [widget.invoiceId]);
     services.store.changed();
+
     if (!mounted) return;
     Navigator.pop(context);
   }
@@ -145,6 +171,7 @@ class _InvoiceDetailScreenState extends State<InvoiceDetailScreen> {
     final amountController = TextEditingController(text: (p.amountMinor / 100).toStringAsFixed(2));
     final rateController = TextEditingController(text: p.exchangeRate?.toString() ?? '');
     final invCur = _invoice?['currency'] as String?;
+
     final result = await showDialog<Map<String, dynamic>>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -170,22 +197,37 @@ class _InvoiceDetailScreenState extends State<InvoiceDetailScreen> {
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('إلغاء')),
           FilledButton(
-              onPressed: () => Navigator.pop(ctx, {'amount': amountController.text, 'rate': rateController.text}),
-              child: const Text('حفظ')),
+            onPressed: () => Navigator.pop(ctx, {'amount': amountController.text, 'rate': rateController.text}),
+            child: const Text('حفظ')),
         ],
       ),
     );
+
     if (result == null || !mounted) return;
+
     final amount = double.tryParse(result['amount'] as String);
     if (amount == null || amount <= 0) return;
+
     final rate = double.tryParse(result['rate'] as String);
     final services = context.read<AppServices>();
     final now = DateTime.now().toIso8601String();
+    final newAmount = (amount * 100).round();
+
+    // تحديث invoice_payments
     await services.db.update('invoice_payments', {
-      'amount_minor': (amount * 100).round(),
+      'amount_minor': newAmount,
       'exchange_rate': rate,
       'updated_at': now,
     }, where: 'id = ?', whereArgs: [p.id]);
+
+    // جديد: تحديث transactions أيضاً باستخدام transaction_id
+    if (p.transactionId != null) {
+      await services.db.update('transactions', {
+        'amount_minor': newAmount,
+        'updated_at': now,
+      }, where: 'id = ?', whereArgs: [p.transactionId]);
+    }
+
     services.store.changed();
     _load();
   }
@@ -195,15 +237,26 @@ class _InvoiceDetailScreenState extends State<InvoiceDetailScreen> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('حذف الدفعة؟'),
+        content: const Text('سيتم حذف هذه الدفعة من جميع الحسابات.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('إلغاء')),
           FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('حذف')),
         ],
       ),
     );
+
     if (ok != true || !mounted) return;
+
     final services = context.read<AppServices>();
+    
+    // حذف من invoice_payments
     await services.db.delete('invoice_payments', where: 'id = ?', whereArgs: [p.id]);
+
+    // جديد: حذف من transactions أيضاً باستخدام transaction_id
+    if (p.transactionId != null) {
+      await services.db.delete('transactions', where: 'id = ?', whereArgs: [p.transactionId]);
+    }
+
     services.store.changed();
     _load();
   }
@@ -213,10 +266,12 @@ class _InvoiceDetailScreenState extends State<InvoiceDetailScreen> {
     if (_loading) {
       return Scaffold(appBar: AppBar(), body: const Center(child: CircularProgressIndicator()));
     }
+
     final inv = _invoice;
     if (inv == null) {
       return Scaffold(appBar: AppBar(), body: const Center(child: Text('لم تعد موجودة')));
     }
+
     final invCur = inv['currency'] as String;
     final amount = inv['amount_minor'] as int;
     var paid = 0;
@@ -302,11 +357,11 @@ class _InvoiceDetailScreenState extends State<InvoiceDetailScreen> {
                     final result = await Navigator.push<bool>(
                       context,
                       MaterialPageRoute(
-                          builder: (_) => PaymentFormScreen(
-                                invoiceId: widget.invoiceId,
-                                invoiceCurrency: invCur,
-                                remainingMinor: remaining,
-                              )),
+                        builder: (_) => PaymentFormScreen(
+                          invoiceId: widget.invoiceId,
+                          invoiceCurrency: invCur,
+                          remainingMinor: remaining,
+                        )),
                     );
                     if (result == true && mounted) _load();
                   },

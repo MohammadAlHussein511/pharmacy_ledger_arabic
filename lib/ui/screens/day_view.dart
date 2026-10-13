@@ -18,6 +18,7 @@ typedef _DayData = ({PeriodSummary summary, List<LedgerTransaction> items});
 /// and for any historical day opened from reports.
 class DayView extends StatelessWidget {
   const DayView({super.key, required this.day});
+
   final DateTime day;
 
   @override
@@ -33,19 +34,22 @@ class DayView extends StatelessWidget {
       load: () async {
         final r = await Future.wait<Object>([
           services.reports.day(day),
-          services.transactions.forDay(day),
+          // التعديل: تغيير forDay إلى onDay
+          services.transactions.onDay(day),
         ]);
         return (summary: r[0] as PeriodSummary, items: r[1] as List<LedgerTransaction>);
       },
       builder: (context, data) {
         final sales = data.items.where((x) => x.isSale).toList();
         final payments = data.items.where((x) => x.isPayment).toList();
+
         return ListView(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
           children: [
             Text(Dates.fullDate(day), style: t.titleLarge?.copyWith(fontWeight: FontWeight.w700)),
             const SizedBox(height: 16),
-            // ---------------------------------------------------------- sales
+
+            // ----------------------------------- sales
             // [تم التعديل] - ترجمة قسم المبيعات
             SectionCard(
               title: 'المبيعات',
@@ -77,8 +81,10 @@ class DayView extends StatelessWidget {
                 ],
               ),
             ),
+
             const SizedBox(height: 16),
-            // ------------------------------------------------------- payments
+
+            // ----------------------------------- payments
             // [تم التعديل] - ترجمة قسم دفعات المستودعات
             SectionCard(
               title: 'دفعات المستودعات',
@@ -91,6 +97,7 @@ class DayView extends StatelessWidget {
                   else
                     for (final c in data.summary.paidCurrencies)
                       AmountRow(label: 'إجمالي ${c.code}', minor: data.summary.payment(c), currency: c),
+
                   if (payments.isEmpty)
                     EmptyState(
                       icon: Icons.local_shipping_outlined,
@@ -102,6 +109,7 @@ class DayView extends StatelessWidget {
                     const Divider(),
                     for (final p in payments) TransactionTile(tx: p),
                   ],
+
                   const SizedBox(height: 8),
                   FilledButton.tonalIcon(
                     onPressed: () => openAddPayment(context, day: day),
@@ -121,6 +129,7 @@ class DayView extends StatelessWidget {
 /// "12:35 — 850 TRY", tap for Edit / Delete.
 class _SaleLine extends StatelessWidget {
   const _SaleLine({required this.tx});
+
   final LedgerTransaction tx;
 
   @override
@@ -135,7 +144,7 @@ class _SaleLine extends StatelessWidget {
           children: [
             Text(Dates.shortTime(tx.time),
                 style: t.bodyLarge?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant)),
-            const Text('  —  '),
+            const Text(' — '),
             Expanded(
               child: Text(Money.format(tx.amountMinor, tx.currency),
                   overflow: TextOverflow.ellipsis,
@@ -154,6 +163,7 @@ class _SaleLine extends StatelessWidget {
 /// Pushed page for any historical day.
 class DayScreen extends StatelessWidget {
   const DayScreen({super.key, required this.day});
+
   final DateTime day;
 
   @override
@@ -164,5 +174,4 @@ class DayScreen extends StatelessWidget {
 }
 
 void openDay(BuildContext context, DateTime day) => Navigator.push(
-    context, MaterialPageRoute<void>(builder: (_) => DayScreen(day: Dates.dateOnly(day))));
-    
+      context, MaterialPageRoute<void>(builder: (_) => DayScreen(day: Dates.dateOnly(day))));
