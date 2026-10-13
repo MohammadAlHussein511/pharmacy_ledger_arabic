@@ -1,6 +1,7 @@
-import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+
+import '../../domain/invoice_math.dart';
 import '../../services.dart';
 import 'invoice_form_screen.dart';
 import 'payment_form_screen.dart';
@@ -13,34 +14,11 @@ class InvoiceDetailScreen extends StatefulWidget {
   State<InvoiceDetailScreen> createState() => _InvoiceDetailScreenState();
 }
 
-class _Payment {
-  _Payment({
-    required this.id,
-    required this.amountMinor,
-    required this.currencyPaid,
-    required this.exchangeRate,
-    required this.date,
-    required this.time,
-    required this.equivalentInInvoiceCurrency,
-    required this.transactionId,
-  });
-
-  final int id;
-  final int amountMinor;
-  final String currencyPaid;
-  final double? exchangeRate;
-  final String date;
-  final String time;
-  final int equivalentInInvoiceCurrency;
-  final int? transactionId;
-}
-
-String _money(int minor, String cur) => '${(minor / 100).toStringAsFixed(2)} $cur';
-
 class _InvoiceDetailScreenState extends State<InvoiceDetailScreen> {
   Map<String, Object?>? _invoice;
   String? _warehouseName;
-  List<_Payment> _payments = [];
+  int _paid = 0;
+  List<PayRow> _payments = [];
   bool _loading = true;
 
   @override
@@ -53,70 +31,28 @@ class _InvoiceDetailScreenState extends State<InvoiceDetailScreen> {
     setState(() => _loading = true);
     try {
       final services = context.read<AppServices>();
-      
-      // إضافة حقل transaction_id إذا لم يكن موجوداً
-      try {
-        await services.db.execute('ALTER TABLE invoice_payments ADD COLUMN transaction_id INTEGER');
-      } catch (e) {
-        // الحقل موجود مسبقاً
-      }
-
-      final bytes = await services.backup.createBackup();
-      final env = jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>;
-      final data = env['data'] as Map<String, dynamic>;
-      final whs = (data['warehouses'] as List? ?? []).cast<Map<String, dynamic>>();
-      final invs = (data['invoices'] as List? ?? []).cast<Map<String, dynamic>>();
-      final pays = (data['invoice_payments'] as List? ?? []).cast<Map<String, dynamic>>();
-
-      final inv = invs.firstWhere((i) => i['id'] == widget.invoiceId, orElse: () => <String, Object?>{});
-      if (inv.isEmpty) {
+      final db = services.db;
+      final invs = await db.query('invoices', where: 'id = ?', whereArgs: [widget.invoiceId]);
+      if (invs.isEmpty) {
         if (!mounted) return;
         setState(() => _loading = false);
         return;
       }
-
+      final inv = invs.first;
       final wid = inv['warehouse_id'] as int;
-      final whName = whs.firstWhere((w) => w['id'] == wid, orElse: () => {'name': 'مستودع محذوف'})['name'] as String;
-      final invCur = inv['currency'] as String;
-
-      final myPays = pays.where((p) => p['invoice_id'] == widget.invoiceId).toList()
-        ..sort((a, b) => (b['payment_date'] as String).compareTo(a['payment_date'] as String));
-
-      final payments = <_Payment>[];
-      for (final p in myPays) {
-        final paidCur = p['currency_paid'] as String;
-        final amount = p['amount_minor'] as int;
-        final rate = (p['exchange_rate'] as num?)?.toDouble();
-
-        int equivalent;
-        if (paidCur == invCur) {
-          equivalent = amount;
-        } else if (rate != null && rate > 0) {
-          equivalent = (amount / rate).round();
-        } else {
-          equivalent = amount;
-        }
-
-        payments.add(_Payment(
-          id: p['id'] as int,
-          amountMinor: amount,
-          currencyPaid: paidCur,
-          exchangeRate: rate,
-          date: p['payment_date'] as String,
-          time: p['payment_time'] as String,
-          equivalentInInvoiceCurrency: equivalent,
-          transactionId: p['transaction_id'] as int?,
-        ));
-      }
+      final whs = await db.query('warehouses', where: 'id = ?', whereArgs: [wid]);
+      final paidMap = await InvoiceMath.paidByInvoice(db, wid);
+      final pays = await InvoiceMath.warehousePayments(db, wid);
 
       if (!mounted) return;
       setState(() {
         _invoice = inv.cast<String, Object?>();
-        _warehouseName = whName;
-        _payments = payments;
+        _warehouseName = whs.isEmpty ? 'مستودع محذوف' : whs.first['name'] as String;
+        _paid = paidMap[widget.invoiceId] ?? 0;
+        _payments = pays.reversed.toList();
         _loading = false;
       });
-    } catch (e) {
+    } catch (_) {
       if (!mounted) return;
       setState(() => _loading = false);
     }
@@ -135,43 +71,52 @@ class _InvoiceDetailScreenState extends State<InvoiceDetailScreen> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('حذف الفاتورة؟'),
-        content: const Text('سيتم حذف الفاتورة وكل دفعاتها نهائياً.'),
+        content: const Text('سيتم حذف الفاتورة. الدفعات المرتبطة بالمستودع تبقى محفوظة.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('إلغاء')),
           FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: Theme.of(ctx).colorScheme.error),
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('حذف')),
+              style: FilledButton.styleFrom(backgroundColor: Theme.of(ctx).colorScheme.error),
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('حذف')),
         ],
       ),
     );
-
     if (ok != true || !mounted) return;
-
     final services = context.read<AppServices>();
-    
-    // جديد: حذف الدفعات من transactions أيضاً
-    final pays = await services.db.query('invoice_payments', where: 'invoice_id = ?', whereArgs: [widget.invoiceId]);
-    for (final p in pays) {
-      final txId = p['transaction_id'] as int?;
-      if (txId != null) {
-        await services.db.delete('transactions', where: 'id = ?', whereArgs: [txId]);
+    final db = services.db;
+    final wid = _invoice!['warehouse_id'] as int;
+
+    await db.transaction((txn) async {
+      // إعادة ربط دفعات هذه الفاتورة بأقدم فاتورة أخرى للمستودع
+      final others = await txn.query('invoices',
+          where: 'warehouse_id = ? AND id != ?',
+          whereArgs: [wid, widget.invoiceId],
+          orderBy: 'invoice_date ASC, id ASC');
+      final pays = await txn.query('invoice_payments',
+          where: 'invoice_id = ?', whereArgs: [widget.invoiceId]);
+      for (final p in pays) {
+        if (others.isNotEmpty) {
+          await txn.update('invoice_payments', {'invoice_id': others.first['id']},
+              where: 'id = ?', whereArgs: [p['id']]);
+        } else {
+          final txId = p['transaction_id'] as int?;
+          if (txId != null) {
+            await txn.delete('transactions', where: 'id = ?', whereArgs: [txId]);
+          }
+          await txn.delete('invoice_payments', where: 'id = ?', whereArgs: [p['id']]);
+        }
       }
-    }
-
-    await services.db.delete('invoice_payments', where: 'invoice_id = ?', whereArgs: [widget.invoiceId]);
-    await services.db.delete('invoices', where: 'id = ?', whereArgs: [widget.invoiceId]);
+      await txn.delete('invoices', where: 'id = ?', whereArgs: [widget.invoiceId]);
+    });
     services.store.changed();
-
     if (!mounted) return;
     Navigator.pop(context);
   }
 
-  Future<void> _editPayment(_Payment p) async {
+  Future<void> _editPayment(PayRow p) async {
     final amountController = TextEditingController(text: (p.amountMinor / 100).toStringAsFixed(2));
     final rateController = TextEditingController(text: p.exchangeRate?.toString() ?? '');
     final invCur = _invoice?['currency'] as String?;
-
     final result = await showDialog<Map<String, dynamic>>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -182,14 +127,16 @@ class _InvoiceDetailScreenState extends State<InvoiceDetailScreen> {
             TextField(
               controller: amountController,
               keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              decoration: InputDecoration(labelText: 'القيمة (${p.currencyPaid})', border: const OutlineInputBorder()),
+              decoration: InputDecoration(
+                  labelText: 'القيمة (${p.currencyPaid})', border: const OutlineInputBorder()),
             ),
             if (p.currencyPaid != invCur) ...[
               const SizedBox(height: 12),
               TextField(
                 controller: rateController,
                 keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                decoration: const InputDecoration(labelText: 'قيمة الصرف', border: OutlineInputBorder()),
+                decoration:
+                    const InputDecoration(labelText: 'قيمة الصرف', border: OutlineInputBorder()),
               ),
             ],
           ],
@@ -197,66 +144,62 @@ class _InvoiceDetailScreenState extends State<InvoiceDetailScreen> {
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('إلغاء')),
           FilledButton(
-            onPressed: () => Navigator.pop(ctx, {'amount': amountController.text, 'rate': rateController.text}),
-            child: const Text('حفظ')),
+              onPressed: () => Navigator.pop(
+                  ctx, {'amount': amountController.text, 'rate': rateController.text}),
+              child: const Text('حفظ')),
         ],
       ),
     );
-
     if (result == null || !mounted) return;
-
     final amount = double.tryParse(result['amount'] as String);
     if (amount == null || amount <= 0) return;
-
     final rate = double.tryParse(result['rate'] as String);
     final services = context.read<AppServices>();
     final now = DateTime.now().toIso8601String();
-    final newAmount = (amount * 100).round();
 
-    // تحديث invoice_payments
-    await services.db.update('invoice_payments', {
-      'amount_minor': newAmount,
-      'exchange_rate': rate,
-      'updated_at': now,
-    }, where: 'id = ?', whereArgs: [p.id]);
-
-    // جديد: تحديث transactions أيضاً باستخدام transaction_id
-    if (p.transactionId != null) {
-      await services.db.update('transactions', {
-        'amount_minor': newAmount,
+    // [نهائي] تعديل الدفعة + الـ transaction المرتبط معاً
+    await services.db.transaction((txn) async {
+      await txn.update('invoice_payments', {
+        'amount_minor': (amount * 100).round(),
+        'exchange_rate': rate,
         'updated_at': now,
-      }, where: 'id = ?', whereArgs: [p.transactionId]);
-    }
-
+      }, where: 'id = ?', whereArgs: [p.id]);
+      if (p.transactionId != null) {
+        await txn.update('transactions', {
+          'amount_minor': (amount * 100).round(),
+          'updated_at': now,
+        }, where: 'id = ?', whereArgs: [p.transactionId]);
+      }
+    });
     services.store.changed();
     _load();
   }
 
-  Future<void> _deletePayment(_Payment p) async {
+  Future<void> _deletePayment(PayRow p) async {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('حذف الدفعة؟'),
-        content: const Text('سيتم حذف هذه الدفعة من جميع الحسابات.'),
+        content: const Text('ستُحذف من الحسابات ومن الصفحة الرئيسية معاً.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('إلغاء')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('حذف')),
+          FilledButton(
+              style: FilledButton.styleFrom(backgroundColor: Theme.of(ctx).colorScheme.error),
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('حذف')),
         ],
       ),
     );
-
     if (ok != true || !mounted) return;
-
     final services = context.read<AppServices>();
-    
-    // حذف من invoice_payments
-    await services.db.delete('invoice_payments', where: 'id = ?', whereArgs: [p.id]);
 
-    // جديد: حذف من transactions أيضاً باستخدام transaction_id
-    if (p.transactionId != null) {
-      await services.db.delete('transactions', where: 'id = ?', whereArgs: [p.transactionId]);
-    }
-
+    // [نهائي] حذف الدفعة + الـ transaction المرتبط معاً
+    await services.db.transaction((txn) async {
+      if (p.transactionId != null) {
+        await txn.delete('transactions', where: 'id = ?', whereArgs: [p.transactionId]);
+      }
+      await txn.delete('invoice_payments', where: 'id = ?', whereArgs: [p.id]);
+    });
     services.store.changed();
     _load();
   }
@@ -266,28 +209,28 @@ class _InvoiceDetailScreenState extends State<InvoiceDetailScreen> {
     if (_loading) {
       return Scaffold(appBar: AppBar(), body: const Center(child: CircularProgressIndicator()));
     }
-
     final inv = _invoice;
     if (inv == null) {
       return Scaffold(appBar: AppBar(), body: const Center(child: Text('لم تعد موجودة')));
     }
-
     final invCur = inv['currency'] as String;
     final amount = inv['amount_minor'] as int;
-    var paid = 0;
-    for (final p in _payments) {
-      paid += p.equivalentInInvoiceCurrency;
-    }
-    final remaining = amount - paid;
-    final progress = amount > 0 ? (paid / amount).clamp(0.0, 1.0) : 0.0;
+    final remaining = amount - _paid;
+    final progress = amount > 0 ? (_paid / amount).clamp(0.0, 1.0) : 0.0;
     final t = Theme.of(context).textTheme;
 
     return Scaffold(
       appBar: AppBar(
         title: Text(_warehouseName ?? 'فاتورة'),
         actions: [
-          IconButton(tooltip: 'تعديل الفاتورة', icon: const Icon(Icons.edit_outlined), onPressed: _editInvoice),
-          IconButton(tooltip: 'حذف الفاتورة', icon: const Icon(Icons.delete_outline), onPressed: _deleteInvoice),
+          IconButton(
+              tooltip: 'تعديل الفاتورة',
+              icon: const Icon(Icons.edit_outlined),
+              onPressed: _editInvoice),
+          IconButton(
+              tooltip: 'حذف الفاتورة',
+              icon: const Icon(Icons.delete_outline),
+              onPressed: _deleteInvoice),
         ],
       ),
       body: RefreshIndicator(
@@ -306,7 +249,8 @@ class _InvoiceDetailScreenState extends State<InvoiceDetailScreen> {
                     Row(children: [
                       Text('المستودع:', style: t.bodyMedium),
                       const Spacer(),
-                      Text(_warehouseName ?? '', style: t.bodyMedium?.copyWith(fontWeight: FontWeight.w600)),
+                      Text(_warehouseName ?? '',
+                          style: t.bodyMedium?.copyWith(fontWeight: FontWeight.w600)),
                     ]),
                     const SizedBox(height: 4),
                     Row(children: [
@@ -315,15 +259,19 @@ class _InvoiceDetailScreenState extends State<InvoiceDetailScreen> {
                       Text(inv['invoice_date'] as String, style: t.bodyMedium),
                     ]),
                     const Divider(height: 24),
-                    Text('قيمة الفاتورة', style: t.bodyMedium?.copyWith(color: Theme.of(context).colorScheme.outline)),
-                    Text(_money(amount, invCur), style: t.headlineSmall?.copyWith(fontWeight: FontWeight.w700)),
+                    Text('قيمة الفاتورة',
+                        style: t.bodyMedium
+                            ?.copyWith(color: Theme.of(context).colorScheme.outline)),
+                    Text(moneyText(amount, invCur),
+                        style: t.headlineSmall?.copyWith(fontWeight: FontWeight.w700)),
                     const SizedBox(height: 8),
                     Row(children: [
                       Expanded(
                         child: LinearProgressIndicator(
                           value: progress,
                           minHeight: 8,
-                          backgroundColor: Theme.of(context).colorScheme.surfaceContainerHighest,
+                          backgroundColor:
+                              Theme.of(context).colorScheme.surfaceContainerHighest,
                         ),
                       ),
                       const SizedBox(width: 12),
@@ -333,14 +281,17 @@ class _InvoiceDetailScreenState extends State<InvoiceDetailScreen> {
                     Row(children: [
                       Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                         Text('المدفوع', style: t.bodySmall),
-                        Text(_money(paid, invCur), style: t.titleMedium?.copyWith(color: Colors.green, fontWeight: FontWeight.w700)),
+                        Text(moneyText(_paid, invCur),
+                            style: t.titleMedium
+                                ?.copyWith(color: Colors.green, fontWeight: FontWeight.w700)),
                       ]),
                       const Spacer(),
                       Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
                         Text('المتبقي', style: t.bodySmall),
-                        Text(_money(remaining, invCur),
+                        Text(moneyText(remaining, invCur),
                             style: t.titleMedium?.copyWith(
-                                color: remaining > 0 ? Colors.red : Colors.green, fontWeight: FontWeight.w700)),
+                                color: remaining > 0 ? Colors.red : Colors.green,
+                                fontWeight: FontWeight.w700)),
                       ]),
                     ]),
                   ],
@@ -349,7 +300,7 @@ class _InvoiceDetailScreenState extends State<InvoiceDetailScreen> {
             ),
             const SizedBox(height: 16),
             Row(children: [
-              Text('سجل الدفعات (${_payments.length})', style: t.titleMedium),
+              Text('دفعات المستودع (${_payments.length})', style: t.titleMedium),
               const Spacer(),
               if (remaining > 0)
                 FilledButton.icon(
@@ -357,11 +308,12 @@ class _InvoiceDetailScreenState extends State<InvoiceDetailScreen> {
                     final result = await Navigator.push<bool>(
                       context,
                       MaterialPageRoute(
-                        builder: (_) => PaymentFormScreen(
-                          invoiceId: widget.invoiceId,
-                          invoiceCurrency: invCur,
-                          remainingMinor: remaining,
-                        )),
+                          builder: (_) => PaymentFormScreen(
+                                invoiceId: widget.invoiceId,
+                                invoiceCurrency: invCur,
+                                remainingMinor: remaining,
+                                warehouseId: inv['warehouse_id'] as int,
+                              )),
                     );
                     if (result == true && mounted) _load();
                   },
@@ -371,27 +323,34 @@ class _InvoiceDetailScreenState extends State<InvoiceDetailScreen> {
             ]),
             const SizedBox(height: 8),
             if (_payments.isEmpty)
-              const Card(child: ListTile(title: Text('لم تُدفع أي دفعة بعد')))
+              const Card(child: ListTile(title: Text('لا توجد دفعات بعد')))
             else
               ..._payments.map((p) => Card(
                     margin: const EdgeInsets.symmetric(vertical: 4),
                     child: ListTile(
-                      leading: const CircleAvatar(child: Icon(Icons.payments_outlined)),
-                      title: Text(_money(p.amountMinor, p.currencyPaid)),
+                      leading: currencyAvatar(p.currencyPaid),
+                      title: Text(moneyText(p.amountMinor, p.currencyPaid)),
                       subtitle: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          if (p.currencyPaid != invCur)
-                            Text('ما يعادل ${_money(p.equivalentInInvoiceCurrency, invCur)}'
-                                '${p.exchangeRate != null ? ' (صرف ${p.exchangeRate})' : ''}'),
-                          Text('${p.date} ${p.time}'),
+                          Text('${p.date} · ${p.time.substring(0, 5)}'),
+                          if (p.note != null && p.note!.isNotEmpty)
+                            Text(p.note!,
+                                style: t.bodySmall
+                                    ?.copyWith(color: Theme.of(context).colorScheme.outline)),
                         ],
                       ),
                       trailing: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          IconButton(tooltip: 'تعديل', icon: const Icon(Icons.edit_outlined, size: 20), onPressed: () => _editPayment(p)),
-                          IconButton(tooltip: 'حذف', icon: const Icon(Icons.delete_outline, size: 20), onPressed: () => _deletePayment(p)),
+                          IconButton(
+                              tooltip: 'تعديل',
+                              icon: const Icon(Icons.edit_outlined, size: 20),
+                              onPressed: () => _editPayment(p)),
+                          IconButton(
+                              tooltip: 'حذف',
+                              icon: const Icon(Icons.delete_outline, size: 20),
+                              onPressed: () => _deletePayment(p)),
                         ],
                       ),
                     ),

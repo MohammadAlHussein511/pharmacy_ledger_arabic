@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../core/dates.dart';
+import '../../domain/invoice_math.dart';
 import '../../services.dart';
 
 class PaymentFormScreen extends StatefulWidget {
@@ -9,12 +11,14 @@ class PaymentFormScreen extends StatefulWidget {
     required this.invoiceId,
     required this.invoiceCurrency,
     required this.remainingMinor,
+    required this.warehouseId,
     this.invoiceRate,
   });
 
   final int invoiceId;
   final String invoiceCurrency;
   final int remainingMinor;
+  final int warehouseId;
   final double? invoiceRate;
 
   @override
@@ -27,6 +31,7 @@ class _PaymentFormScreenState extends State<PaymentFormScreen> {
   final _rateController = TextEditingController();
   final _dateController = TextEditingController();
   final _timeController = TextEditingController();
+
   String _currencyPaid = 'TRY';
   bool _saving = false;
 
@@ -36,7 +41,7 @@ class _PaymentFormScreenState extends State<PaymentFormScreen> {
     final n = DateTime.now();
     String two(int v) => v.toString().padLeft(2, '0');
     _dateController.text = '${n.year}-${two(n.month)}-${two(n.day)}';
-    _timeController.text = '${two(n.hour)}:${two(n.minute)}';
+    _timeController.text = '${two(n.hour)}:${two(n.minute)}:${two(n.second)}';
     _currencyPaid = widget.invoiceCurrency;
     if (widget.invoiceRate != null && widget.invoiceRate! > 0) {
       _rateController.text = '${widget.invoiceRate}';
@@ -51,24 +56,16 @@ class _PaymentFormScreenState extends State<PaymentFormScreen> {
       lastDate: DateTime(2100),
     );
     if (picked != null) {
-      String two(int v) => v.toString().padLeft(2, '0');
-      setState(() {
-        _dateController.text =
-            '${picked.year}-${two(picked.month)}-${two(picked.day)}';
-      });
+      setState(() => _dateController.text = Dates.key(picked));
     }
   }
 
   Future<void> _pickTime() async {
-    final picked = await showTimePicker(
-      context: context,
-      initialTime: TimeOfDay.now(),
-    );
+    final picked = await showTimePicker(context: context, initialTime: TimeOfDay.now());
     if (picked != null) {
       String two(int v) => v.toString().padLeft(2, '0');
       setState(() {
-        _timeController.text = '${two(picked.hour)}:${two(picked.minute)}';
-      });
+        _timeController.text = '${two(picked.hour)}:${two(picked.minute)}:00';      });
     }
   }
 
@@ -84,10 +81,9 @@ class _PaymentFormScreenState extends State<PaymentFormScreen> {
     return (minor / rate).round();
   }
 
-   Future<void> _save() async {
+  Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
 
-    // [جديد] التحقق من عدم تجاوز قيمة الفاتورة
     final equivalent = _equivalentInInvoiceCurrency;
     if (equivalent != null && equivalent > widget.remainingMinor) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -104,19 +100,39 @@ class _PaymentFormScreenState extends State<PaymentFormScreen> {
     setState(() => _saving = true);
     try {
       final services = context.read<AppServices>();
-      final now = DateTime.now().toIso8601String();
+      final now = DateTime.now();
       final amount = (double.parse(_amountController.text) * 100).round();
       final rate = _needsRate ? double.tryParse(_rateController.text) : null;
-      await services.db.insert('invoice_payments', {
-        'invoice_id': widget.invoiceId,
-        'amount_minor': amount,
-        'currency_paid': _currencyPaid,
-        'exchange_rate': rate,
-        'payment_date': _dateController.text,
-        'payment_time': _timeController.text,
-        'created_at': now,
-        'updated_at': now,
+
+      // [نهائي] transaction واحد + invoice_payment واحد مربوطان معاً
+      await services.db.transaction((txn) async {
+        final txId = await txn.insert('transactions', {
+          'type': 'PAYMENT',
+          'amount_minor': amount,
+          'currency': _currencyPaid,
+          'warehouse_id': widget.warehouseId,
+          'invoice_number': null,
+          'note': 'دفعة على فاتورة',
+          'transaction_date': _dateController.text,
+          'transaction_time': _timeController.text,
+          'created_at': now.toIso8601String(),
+          'updated_at': now.toIso8601String(),
+        });
+
+        await txn.insert('invoice_payments', {
+          'invoice_id': widget.invoiceId,
+          'transaction_id': txId,
+          'amount_minor': amount,
+          'currency_paid': _currencyPaid,
+          'exchange_rate': rate,
+          'note': 'دفعة على فاتورة',
+          'payment_date': _dateController.text,
+          'payment_time': _timeController.text,
+          'created_at': now.toIso8601String(),
+          'updated_at': now.toIso8601String(),
+        });
       });
+
       services.store.changed();
       if (!mounted) return;
       Navigator.pop(context, true);
@@ -192,8 +208,7 @@ class _PaymentFormScreenState extends State<PaymentFormScreen> {
             const SizedBox(height: 16),
             TextFormField(
               controller: _amountController,
-              keyboardType:
-                  const TextInputType.numberWithOptions(decimal: true),
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
               decoration: InputDecoration(
                 labelText: 'قيمة الدفعة (${_curLabel(_currencyPaid)}) *',
                 border: const OutlineInputBorder(),
@@ -210,8 +225,7 @@ class _PaymentFormScreenState extends State<PaymentFormScreen> {
               const SizedBox(height: 16),
               TextFormField(
                 controller: _rateController,
-                keyboardType:
-                    const TextInputType.numberWithOptions(decimal: true),
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
                 decoration: InputDecoration(
                   labelText:
                       'قيمة الصرف: 1 ${widget.invoiceCurrency} = ؟ ${_curLabel(_currencyPaid)} *',
@@ -254,9 +268,7 @@ class _PaymentFormScreenState extends State<PaymentFormScreen> {
                   controller: _dateController,
                   readOnly: true,
                   decoration: const InputDecoration(
-                    labelText: 'التاريخ *',
-                    border: OutlineInputBorder(),
-                  ),
+                      labelText: 'التاريخ *', border: OutlineInputBorder()),
                   onTap: _pickDate,
                 ),
               ),
@@ -266,9 +278,7 @@ class _PaymentFormScreenState extends State<PaymentFormScreen> {
                   controller: _timeController,
                   readOnly: true,
                   decoration: const InputDecoration(
-                    labelText: 'الوقت *',
-                    border: OutlineInputBorder(),
-                  ),
+                      labelText: 'الوقت *', border: OutlineInputBorder()),
                   onTap: _pickTime,
                 ),
               ),
@@ -278,13 +288,10 @@ class _PaymentFormScreenState extends State<PaymentFormScreen> {
               onPressed: _saving ? null : _save,
               icon: _saving
                   ? const SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2))
+                      width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
                   : const Icon(Icons.save),
               label: Text(_saving ? 'جارٍ الحفظ...' : 'حفظ الدفعة'),
-              style:
-                  FilledButton.styleFrom(minimumSize: const Size.fromHeight(52)),
+              style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52)),
             ),
           ],
         ),

@@ -88,7 +88,7 @@ class BackupService {
     'exchange_rate', 'note', 'invoice_date', 'created_at', 'updated_at',
   ];
   static const _invPayCols = [
-    'id', 'invoice_id', 'amount_minor', 'currency_paid',
+    'id', 'invoice_id', 'transaction_id', 'amount_minor', 'currency_paid',
     'exchange_rate', 'note', 'payment_date', 'payment_time',
     'created_at', 'updated_at',
   ];

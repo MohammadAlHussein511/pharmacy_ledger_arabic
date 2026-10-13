@@ -1,13 +1,11 @@
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../domain/invoice_math.dart';
 import '../../services.dart';
 import 'invoice_detail_screen.dart';
 import 'invoice_form_screen.dart';
 
-/// قائمة الفواتير مع ملخص إجمالي ما علينا.
 class InvoicesScreen extends StatefulWidget {
   const InvoicesScreen({super.key});
 
@@ -23,8 +21,6 @@ class _InvRow {
     required this.currency,
     required this.amountMinor,
     required this.paidMinor,
-    required this.exchangeRate,
-    required this.note,
     required this.invoiceDate,
   });
   final int id;
@@ -33,8 +29,6 @@ class _InvRow {
   final String currency;
   final int amountMinor;
   final int paidMinor;
-  final double? exchangeRate;
-  final String? note;
   final String invoiceDate;
 
   int get remaining => amountMinor - paidMinor;
@@ -47,12 +41,8 @@ class _InvRow {
           : Colors.red;
 }
 
-String _money(int minor, String cur) =>
-    '${(minor / 100).toStringAsFixed(2)} $cur';
-
 class _InvoicesScreenState extends State<InvoicesScreen> {
   List<_InvRow> _rows = [];
-  Map<int, String> _whNames = {};
   bool _loading = true;
   String _filter = 'all';
 
@@ -66,85 +56,47 @@ class _InvoicesScreenState extends State<InvoicesScreen> {
     setState(() => _loading = true);
     try {
       final services = context.read<AppServices>();
-      final bytes = await services.backup.createBackup();
-      final env = jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>;
-      final data = env['data'] as Map<String, dynamic>;
-      final whs = (data['warehouses'] as List? ?? [])
-          .cast<Map<String, dynamic>>();
-      final invs = (data['invoices'] as List? ?? [])
-          .cast<Map<String, dynamic>>();
-      final pays = (data['invoice_payments'] as List? ?? [])
-          .cast<Map<String, dynamic>>();
-
-      _whNames = {
-        for (final w in whs) w['id'] as int: w['name'] as String,
-      };
-
-      final paidByInv = <int, int>{};
-      for (final p in pays) {
-        final invId = p['invoice_id'] as int;
-        final amount = p['amount_minor'] as int;
-        final paidCur = p['currency_paid'] as String;
-        final rate = p['exchange_rate'] as double?;
-        final inv = invs.firstWhere((i) => i['id'] == invId, orElse: () => {});
-        final invCur = inv['currency'] as String?;
-        if (invCur == null) continue;
-
-        int equivalent;
-        if (paidCur == invCur) {
-          equivalent = amount;
-        } else if (invCur == 'USD' && paidCur == 'TRY' && rate != null && rate > 0) {
-          equivalent = (amount / rate).round();
-        } else if (invCur == 'SYP' && paidCur == 'TRY' && rate != null && rate > 0) {
-          equivalent = (amount / rate).round();
-        } else {
-          equivalent = amount;
-        }
-        paidByInv[invId] = (paidByInv[invId] ?? 0) + equivalent;
-      }
+      final db = services.db;
+      final whs = await db.query('warehouses');
+      final whNames = {for (final w in whs) w['id'] as int: w['name'] as String};
+      final invs = await db.query('invoices', orderBy: 'invoice_date DESC, id DESC');
 
       final rows = <_InvRow>[];
       for (final i in invs) {
-        final id = i['id'] as int;
         final wid = i['warehouse_id'] as int;
+        final paid = await InvoiceMath.paidByInvoice(db, wid);
         rows.add(_InvRow(
-          id: id,
+          id: i['id'] as int,
           warehouseId: wid,
-          warehouseName: _whNames[wid] ?? 'مستودع محذوف',
+          warehouseName: whNames[wid] ?? 'مستودع محذوف',
           currency: i['currency'] as String,
           amountMinor: i['amount_minor'] as int,
-          paidMinor: paidByInv[id] ?? 0,
-          exchangeRate: (i['exchange_rate'] as num?)?.toDouble(),
-          note: i['note'] as String?,
+          paidMinor: paid[i['id'] as int] ?? 0,
           invoiceDate: i['invoice_date'] as String,
         ));
       }
-      rows.sort((a, b) => b.invoiceDate.compareTo(a.invoiceDate));
+
       if (!mounted) return;
       setState(() {
         _rows = rows;
         _loading = false;
       });
-    } catch (e) {
+    } catch (_) {
       if (!mounted) return;
       setState(() => _loading = false);
     }
   }
 
   List<_InvRow> get _filtered {
-    if (_filter == 'unpaid') {
-      return _rows.where((r) => r.paidMinor < r.amountMinor).toList();
-    }
-    if (_filter == 'paid') {
-      return _rows.where((r) => r.paidMinor >= r.amountMinor).toList();
-    }
+    if (_filter == 'unpaid') return _rows.where((r) => r.remaining > 0).toList();
+    if (_filter == 'paid') return _rows.where((r) => r.remaining <= 0).toList();
     return _rows;
   }
 
   Map<String, int> get _totals {
     final m = <String, int>{};
     for (final r in _rows) {
-      m[r.currency] = (m[r.currency] ?? 0) + r.remaining;
+      if (r.remaining > 0) m[r.currency] = (m[r.currency] ?? 0) + r.remaining;
     }
     return m;
   }
@@ -155,9 +107,7 @@ class _InvoicesScreenState extends State<InvoicesScreen> {
     final totals = _totals;
     final totalText = totals.isEmpty
         ? 'لا يوجد ما علينا'
-        : totals.entries
-            .map((e) => _money(e.value, e.key))
-            .join(' + ');
+        : totals.entries.map((e) => moneyText(e.value, e.key)).join(' + ');
     return Scaffold(
       body: _loading
           ? const Center(child: CircularProgressIndicator())
@@ -175,18 +125,13 @@ class _InvoicesScreenState extends State<InvoicesScreen> {
                         children: [
                           Text('إجمالي ما علينا',
                               style: t.titleMedium?.copyWith(
-                                  color: Theme.of(context)
-                                      .colorScheme
-                                      .onPrimaryContainer)),
+                                  color: Theme.of(context).colorScheme.onPrimaryContainer)),
                           const SizedBox(height: 8),
                           Text(totalText,
                               style: t.headlineSmall?.copyWith(
-                                  color: Theme.of(context)
-                                      .colorScheme
-                                      .onPrimaryContainer,
+                                  color: Theme.of(context).colorScheme.onPrimaryContainer,
                                   fontWeight: FontWeight.w700)),
-                          Text('${_rows.length} فاتورة',
-                              style: t.bodySmall),
+                          Text('${_rows.length} فاتورة', style: t.bodySmall),
                         ],
                       ),
                     ),
@@ -196,51 +141,42 @@ class _InvoicesScreenState extends State<InvoicesScreen> {
                     showSelectedIcon: false,
                     segments: const [
                       ButtonSegment(value: 'all', label: Text('الكل')),
-                      ButtonSegment(
-                          value: 'unpaid', label: Text('غير مدفوعة')),
+                      ButtonSegment(value: 'unpaid', label: Text('غير مدفوعة')),
                       ButtonSegment(value: 'paid', label: Text('مدفوعة')),
                     ],
                     selected: {_filter},
-                    onSelectionChanged: (s) =>
-                        setState(() => _filter = s.first),
+                    onSelectionChanged: (s) => setState(() => _filter = s.first),
                   ),
                   const SizedBox(height: 12),
                   if (_filtered.isEmpty)
                     Padding(
                       padding: const EdgeInsets.all(32),
-                      child: Center(
-                        child: Text('لا توجد فواتير',
-                            style: t.bodyLarge),
-                      ),
+                      child: Center(child: Text('لا توجد فواتير', style: t.bodyLarge)),
                     )
                   else
                     ..._filtered.map((r) => Card(
                           margin: const EdgeInsets.symmetric(vertical: 4),
                           child: ListTile(
                             leading: CircleAvatar(
-                              backgroundColor: r.statusColor(context)
-                                  .withValues(alpha: 0.15),
-                              child: Icon(Icons.receipt_long,
-                                  color: r.statusColor(context)),
+                              backgroundColor:
+                                  r.statusColor(context).withValues(alpha: 0.15),
+                              child: Icon(Icons.receipt_long, color: r.statusColor(context)),
                             ),
                             title: Text(r.warehouseName),
                             subtitle: Text(
                               '${r.invoiceDate} · ${r.status}\n'
-                              'المتبقي: ${_money(r.remaining, r.currency)}',
+                              'المتبقي: ${moneyText(r.remaining, r.currency)}',
                             ),
                             isThreeLine: true,
                             trailing: Text(
-                              _money(r.amountMinor, r.currency),
-                              style: t.titleMedium
-                                  ?.copyWith(fontWeight: FontWeight.w700),
+                              moneyText(r.amountMinor, r.currency),
+                              style: t.titleMedium?.copyWith(fontWeight: FontWeight.w700),
                             ),
                             onTap: () async {
                               await Navigator.push(
                                 context,
                                 MaterialPageRoute(
-                                    builder: (_) => InvoiceDetailScreen(
-                                          invoiceId: r.id,
-                                        )),
+                                    builder: (_) => InvoiceDetailScreen(invoiceId: r.id)),
                               );
                               _load();
                             },

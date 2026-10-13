@@ -1,35 +1,53 @@
 import 'package:sqflite/sqflite.dart';
+
 import '../../core/currency.dart';
 import '../../core/dates.dart';
 import '../../data/models/ledger_transaction.dart';
 import '../../domain/validation.dart';
 
 class TransactionFilter {
-  final TransactionType? type;
-  final String? query;
-  final DateTime? from;
-  final DateTime? to;
-  final Currency? currency;
-  final int? warehouseId;
-
   const TransactionFilter({
+    this.query = '',
     this.type,
-    this.query,
+    this.warehouseId,
+    this.currency,
     this.from,
     this.to,
-    this.currency,
-    this.warehouseId,
-  });
+    DateTime? fromDate,
+    DateTime? toDate,
+  })  : _fromDate = from ?? fromDate,
+        _toDate = to ?? toDate;
+
+  final String query;
+  final TransactionType? type;
+  final int? warehouseId;
+  final Currency? currency;
+  final DateTime? from;
+  final DateTime? to;
+  final DateTime? _fromDate;
+  final DateTime? _toDate;
+
+  DateTime? get fromDate => from ?? _fromDate;
+  DateTime? get toDate => to ?? _toDate;
+
+  bool get isEmpty =>
+      query.isEmpty &&
+      type == null &&
+      warehouseId == null &&
+      currency == null &&
+      fromDate == null &&
+      toDate == null;
 }
 
 class TransactionRepository {
   TransactionRepository(this._db, {required this.onChanged});
 
   final Database _db;
-  final VoidCallback onChanged;
+  final void Function() onChanged;
 
   Future<List<LedgerTransaction>> all() async {
-    final rows = await _db.query('transactions', orderBy: 'transaction_date DESC, transaction_time DESC, id DESC');
+    final rows = await _db.query('transactions',
+        orderBy: 'transaction_date DESC, transaction_time DESC, id DESC');
     return rows.map(_fromRow).toList();
   }
 
@@ -54,99 +72,62 @@ class TransactionRepository {
     return rows.map(_fromRow).toList();
   }
 
-  Future<List<LedgerTransaction>> search(TransactionFilter filter, {int limit = 50, int offset = 0}) async {
-    final whereClauses = <String>[];
-    final args = <dynamic>[];
-
-    if (filter.type != null) {
-      whereClauses.add('t.type = ?');
-      args.add(filter.type!.code.toUpperCase());
-    }
-    if (filter.warehouseId != null) {
-      whereClauses.add('t.warehouse_id = ?');
-      args.add(filter.warehouseId);
-    }
-    if (filter.currency != null) {
-      whereClauses.add('t.currency = ?');
-      args.add(filter.currency!.code);
-    }
-    if (filter.from != null) {
-      whereClauses.add('t.transaction_date >= ?');
-      args.add(Dates.key(filter.from!));
-    }
-    if (filter.to != null) {
-      whereClauses.add('t.transaction_date <= ?');
-      args.add(Dates.key(filter.to!));
-    }
-    if (filter.query != null && filter.query!.isNotEmpty) {
-      whereClauses.add('(t.invoice_number LIKE ? OR t.note LIKE ? OR w.name LIKE ?)');
-      args.add('%${filter.query}%');
-      args.add('%${filter.query}%');
-      args.add('%${filter.query}%');
-    }
-
-    final whereStr = whereClauses.isNotEmpty ? whereClauses.join(' AND ') : null;
-    final sql = '''
-      SELECT t.*, w.name as warehouse_name FROM transactions t
-      LEFT JOIN warehouses w ON t.warehouse_id = w.id
-      ${whereStr != null ? 'WHERE $whereStr' : ''}
-      ORDER BY t.transaction_date DESC, t.transaction_time DESC, t.id DESC
-      LIMIT ? OFFSET ?
-    ''';
-    args.add(limit);
-    args.add(offset);
-
+  Future<Map<Currency, int>> totalsByCurrency(TransactionFilter filter) async {
+    final (where, args) = _buildWhere(filter);
+    final sql = where.isEmpty
+        ? 'SELECT currency, SUM(amount_minor) as total FROM transactions GROUP BY currency'
+        : 'SELECT currency, SUM(amount_minor) as total FROM transactions WHERE $where GROUP BY currency';
     final rows = await _db.rawQuery(sql, args);
+    final result = <Currency, int>{};
+    for (final r in rows) {
+      final cur = Currency.fromCode(r['currency'] as String);
+      result[cur] = (r['total'] as num).toInt();
+    }
+    return result;
+  }
+
+  Future<List<LedgerTransaction>> search(
+    TransactionFilter filter, {
+    int limit = 50,
+    int offset = 0,
+  }) async {
+    final (where, args) = _buildWhere(filter);
+    final sql = where.isEmpty
+        ? 'SELECT * FROM transactions ORDER BY transaction_date DESC, transaction_time DESC, id DESC LIMIT ? OFFSET ?'
+        : 'SELECT * FROM transactions WHERE $where ORDER BY transaction_date DESC, transaction_time DESC, id DESC LIMIT ? OFFSET ?';
+    final rows = await _db.rawQuery(sql, [...args, limit, offset]);
     return rows.map(_fromRow).toList();
   }
 
-  Future<Map<Currency, int>> totalsByCurrency(TransactionFilter filter) async {
-    final whereClauses = <String>[];
-    final args = <dynamic>[];
-
-    if (filter.type != null) {
-      whereClauses.add('t.type = ?');
-      args.add(filter.type!.code.toUpperCase());
+  (String, List<Object?>) _buildWhere(TransactionFilter f) {
+    final clauses = <String>[];
+    final args = <Object?>[];
+    if (f.query.isNotEmpty) {
+      clauses.add('(invoice_number LIKE ? OR note LIKE ?)');
+      final q = '%${f.query}%';
+      args..add(q)..add(q);
     }
-    if (filter.warehouseId != null) {
-      whereClauses.add('t.warehouse_id = ?');
-      args.add(filter.warehouseId);
+    if (f.type != null) {
+      clauses.add('type = ?');
+      args.add(f.type == TransactionType.sale ? 'SALE' : 'PAYMENT');
     }
-    if (filter.currency != null) {
-      whereClauses.add('t.currency = ?');
-      args.add(filter.currency!.code);
+    if (f.warehouseId != null) {
+      clauses.add('warehouse_id = ?');
+      args.add(f.warehouseId);
     }
-    if (filter.from != null) {
-      whereClauses.add('t.transaction_date >= ?');
-      args.add(Dates.key(filter.from!));
+    if (f.currency != null) {
+      clauses.add('currency = ?');
+      args.add(f.currency!.code);
     }
-    if (filter.to != null) {
-      whereClauses.add('t.transaction_date <= ?');
-      args.add(Dates.key(filter.to!));
+    if (f.fromDate != null) {
+      clauses.add('transaction_date >= ?');
+      args.add(Dates.key(f.fromDate!));
     }
-    if (filter.query != null && filter.query!.isNotEmpty) {
-      whereClauses.add('(t.invoice_number LIKE ? OR t.note LIKE ? OR w.name LIKE ?)');
-      args.add('%${filter.query}%');
-      args.add('%${filter.query}%');
-      args.add('%${filter.query}%');
+    if (f.toDate != null) {
+      clauses.add('transaction_date <= ?');
+      args.add(Dates.key(f.toDate!));
     }
-
-    final whereStr = whereClauses.isNotEmpty ? whereClauses.join(' AND ') : null;
-    final sql = '''
-      SELECT t.currency, SUM(t.amount_minor) as total
-      FROM transactions t
-      LEFT JOIN warehouses w ON t.warehouse_id = w.id
-      ${whereStr != null ? 'WHERE $whereStr' : ''}
-      GROUP BY t.currency
-    ''';
-
-    final rows = await _db.rawQuery(sql, args);
-    final totals = <Currency, int>{};
-    for (final row in rows) {
-      final c = Currency.fromCode(row['currency'] as String);
-      totals[c] = (row['total'] as num).toInt();
-    }
-    return totals;
+    return (clauses.join(' AND '), args);
   }
 
   Future<int> insert(LedgerTransaction tx) async {
@@ -168,49 +149,55 @@ class TransactionRepository {
     return id;
   }
 
+  /// [نهائي] تعديل transaction + دفعته المرتبطة معاً (صف واحد لكل منهما)
   Future<void> update(LedgerTransaction tx) async {
     if (tx.id == null) throw ArgumentError('Cannot update unsaved transaction');
     _validate(tx);
     final now = DateTime.now().toIso8601String();
-    
-    await _db.update(
-      'transactions',
-      {
-        'type': tx.type.name.toUpperCase(),
-        'amount_minor': tx.amountMinor,
-        'currency': tx.currency.code,
-        'warehouse_id': tx.warehouseId,
-        'invoice_number': tx.invoiceNumber,
-        'note': tx.note,
-        'transaction_date': tx.date,
-        'updated_at': now,
-      },
-      where: 'id = ?',
-      whereArgs: [tx.id],
-    );
 
-    // جديد: تحديث invoice_payments المرتبطة باستخدام transaction_id
-    if (tx.type == TransactionType.payment) {
-      await _db.update(
-        'invoice_payments',
+    await _db.transaction((txn) async {
+      await txn.update(
+        'transactions',
         {
+          'type': tx.type.name.toUpperCase(),
           'amount_minor': tx.amountMinor,
-          'currency_paid': tx.currency.code,
+          'currency': tx.currency.code,
+          'warehouse_id': tx.warehouseId,
+          'invoice_number': tx.invoiceNumber,
+          'note': tx.note,
+          'transaction_date': tx.date,
           'updated_at': now,
         },
-        where: 'transaction_id = ?',
+        where: 'id = ?',
         whereArgs: [tx.id],
       );
-    }
+
+      if (tx.type == TransactionType.payment) {
+        await txn.update(
+          'invoice_payments',
+          {
+            'amount_minor': tx.amountMinor,
+            'currency_paid': tx.currency.code,
+            'note': tx.note,
+            'payment_date': tx.date,
+            'updated_at': now,
+          },
+          where: 'transaction_id = ?',
+          whereArgs: [tx.id],
+        );
+      }
+    });
 
     onChanged();
   }
 
+  /// [نهائي] حذف transaction + دفعته المرتبطة معاً
   Future<void> delete(int id) async {
-    // جديد: حذف invoice_payments المرتبطة باستخدام transaction_id
-    await _db.delete('invoice_payments', where: 'transaction_id = ?', whereArgs: [id]);
-    
-    await _db.delete('transactions', where: 'id = ?', whereArgs: [id]);
+    await _db.transaction((txn) async {
+      await txn.delete('invoice_payments',
+          where: 'transaction_id = ?', whereArgs: [id]);
+      await txn.delete('transactions', where: 'id = ?', whereArgs: [id]);
+    });
     onChanged();
   }
 
@@ -238,7 +225,6 @@ class TransactionRepository {
       amountMinor: row['amount_minor'] as int,
       currency: Currency.fromCode(row['currency'] as String),
       warehouseId: row['warehouse_id'] as int?,
-      warehouseName: row['warehouse_name'] as String?,
       invoiceNumber: row['invoice_number'] as String?,
       note: row['note'] as String?,
       date: row['transaction_date'] as String,
@@ -246,5 +232,3 @@ class TransactionRepository {
     );
   }
 }
-
-typedef VoidCallback = void Function();
