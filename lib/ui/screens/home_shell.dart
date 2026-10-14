@@ -5,12 +5,13 @@ import '../../services.dart';
 import '../../sync/auto_sync.dart';
 import 'accounts_screen.dart';
 import 'home_screen.dart';
-import 'more_screen.dart';
 import 'reports/reports_screen.dart';
 import 'settings_screen.dart';
 import 'today_screen.dart';
-import 'weeks_screen.dart';  // [مضاف] هذا الاستيراد كان ناقصاً
+import 'warehouses_screen.dart';
+import 'weeks_screen.dart';
 
+/// 7 تبويبات مرتبة حسب الأهمية والاستخدام اليومي + سكرول جانبي
 class HomeShell extends StatefulWidget {
   const HomeShell({super.key});
 
@@ -21,20 +22,15 @@ class HomeShell extends StatefulWidget {
   State<HomeShell> createState() => HomeShellState();
 }
 
-class HomeShellState extends State<HomeShell> {
-  int _index = 0;
-  int _tick = 0;
+class HomeShellState extends State<HomeShell> with SingleTickerProviderStateMixin {
+  late final TabController _tabController;
   final _reportsKey = GlobalKey<ReportsScreenState>();
   AutoSync? _autoSync;
-
-  /// إعادة بناء الشاشات لقراءة أحدث البيانات
-  void bump() {
-    if (mounted) setState(() => _tick++);
-  }
 
   @override
   void initState() {
     super.initState();
+    _tabController = TabController(length: 7, vsync: this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       _autoSync = AutoSync(context.read<AppServices>())..start();
@@ -43,86 +39,68 @@ class HomeShellState extends State<HomeShell> {
 
   @override
   void dispose() {
+    _tabController.dispose();
     _autoSync?.stop();
     super.dispose();
   }
 
-  void openTab(int index) => setState(() {
-        _index = index;
-        _tick++;
-      });
-
-  void openReports(ReportTab tab) {
-    setState(() {
-      _index = 3;
-      _tick++;
-    });
-    WidgetsBinding.instance
-        .addPostFrameCallback((_) => _reportsKey.currentState?.show(tab));
+  /// [مضاف] لإعادة بناء الشاشات عند التعديل/الحذف من أي مكان
+  void bump() {
+    if (mounted) setState(() {});
   }
 
-  Widget _tabChild(int index) {
-    switch (index) {
-      case 1:
-        return TodayScreen(key: ValueKey('today-$_tick'));
-      case 2:
-        return WeeksScreen(key: ValueKey('weeks-$_tick'));
-      case 3:
-        return ReportsScreen(key: _reportsKey);
-      case 4:
-        return AccountsScreen(key: ValueKey('accounts-$_tick'));
-      case 5:
-        return const SettingsScreen();
-      case 6:
-        return const MoreScreen();
-      default:
-        return HomeScreen(key: ValueKey('home-$_tick'));
-    }
+  void openTab(int index) {
+    setState(() => _tabController.index = index);
+  }
+
+  void openReports(ReportTab tab) {
+    setState(() => _tabController.index = 5);
+    WidgetsBinding.instance
+        .addPostFrameCallback((_) => _reportsKey.currentState?.show(tab));
   }
 
   @override
   Widget build(BuildContext context) {
     return PopScope(
-      canPop: _index == 0,
+      canPop: _tabController.index == 0,
       onPopInvokedWithResult: (didPop, _) {
-        if (!didPop) setState(() => _index = 0);
+        if (!didPop) setState(() => _tabController.index = 0);
       },
       child: Scaffold(
-        body: _tabChild(_index),
-        bottomNavigationBar: NavigationBar(
-          selectedIndex: _index,
-          onDestinationSelected: openTab,
-          labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
-          destinations: const [
-            NavigationDestination(
-                icon: Icon(Icons.dashboard_outlined),
-                selectedIcon: Icon(Icons.dashboard),
-                label: 'الرئيسية'),
-            NavigationDestination(
-                icon: Icon(Icons.today_outlined),
-                selectedIcon: Icon(Icons.today),
-                label: 'اليوم'),
-            NavigationDestination(
-                icon: Icon(Icons.calendar_month_outlined),
-                selectedIcon: Icon(Icons.calendar_month),
-                label: 'الأسابيع'),
-            NavigationDestination(
-                icon: Icon(Icons.bar_chart_outlined),
-                selectedIcon: Icon(Icons.bar_chart),
-                label: 'التقارير'),
-            NavigationDestination(
-                icon: Icon(Icons.account_balance_wallet_outlined),
-                selectedIcon: Icon(Icons.account_balance_wallet),
-                label: 'الحسابات'),
-            NavigationDestination(
-                icon: Icon(Icons.settings_outlined),
-                selectedIcon: Icon(Icons.settings),
-                label: 'الإعدادات'),
-            NavigationDestination(
-                icon: Icon(Icons.more_horiz),
-                selectedIcon: Icon(Icons.more_horiz),
-                label: 'المزيد'),
+        body: TabBarView(
+          controller: _tabController,
+          children: [
+            const HomeScreen(),
+            const TodayScreen(),
+            const AccountsScreen(),
+            const WarehousesScreen(standalone: true),
+            const WeeksScreen(),
+            ReportsScreen(key: _reportsKey),
+            const SettingsScreen(),
           ],
+        ),
+        bottomNavigationBar: Material(
+          color: Theme.of(context).colorScheme.surface,
+          child: TabBar(
+            controller: _tabController,
+            isScrollable: true,
+            tabAlignment: TabAlignment.start,
+            dividerColor: Colors.transparent,
+            labelStyle: Theme.of(context).textTheme.labelSmall?.copyWith(
+                fontWeight: FontWeight.w600, fontSize: 11),
+            unselectedLabelStyle: Theme.of(context).textTheme.labelSmall?.copyWith(
+                fontSize: 11),
+            indicatorColor: Theme.of(context).colorScheme.primary,
+            tabs: const [
+              Tab(icon: Icon(Icons.dashboard_outlined), text: 'الرئيسية'),
+              Tab(icon: Icon(Icons.today_outlined), text: 'اليوم'),
+              Tab(icon: Icon(Icons.account_balance_wallet_outlined), text: 'الحسابات'),
+              Tab(icon: Icon(Icons.warehouse_outlined), text: 'المستودعات'),
+              Tab(icon: Icon(Icons.calendar_month_outlined), text: 'الأسابيع'),
+              Tab(icon: Icon(Icons.bar_chart_outlined), text: 'التقارير'),
+              Tab(icon: Icon(Icons.settings_outlined), text: 'الإعدادات'),
+            ],
+          ),
         ),
       ),
     );

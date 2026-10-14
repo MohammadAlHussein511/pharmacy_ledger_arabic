@@ -4,7 +4,7 @@ import 'package:sqflite/sqflite.dart';
 class AppDatabase {
   AppDatabase._();
 
-  static const int schemaVersion = 4; // [نهائي] من 3 إلى 4: كنس الصفوف اليتيمة
+  static const int schemaVersion = 4;
   static const String fileName = 'pharmacy_ledger.db';
 
   static Future<Database> open({DatabaseFactory? factory, String? path}) async {
@@ -23,27 +23,29 @@ class AppDatabase {
             batch.execute(statement);
           }
           await batch.commit(noResult: true);
-          // حتى عند التثبيت الجديد: ضمان عدم وجود يتيمة
-          await db.execute('DELETE FROM invoice_payments WHERE transaction_id IS NULL');
         },
         onUpgrade: (db, oldVersion, newVersion) async {
           if (oldVersion < 2) {
             for (final statement in _v2Migration) {
-              await db.execute(statement);
+              try { await db.execute(statement); } catch (_) {}
             }
           }
           if (oldVersion < 3) {
             for (final statement in _v3Migration) {
-              await db.execute(statement);
+              try { await db.execute(statement); } catch (_) {}
             }
           }
           if (oldVersion < 4) {
-            // [نهائي] كنس الدفعات اليتيمة غير المرتبطة بأي معاملة
-            await db.execute(
-                'DELETE FROM invoice_payments WHERE transaction_id IS NULL');
-            await db.execute(
-                'DELETE FROM invoice_payments WHERE transaction_id IS NOT NULL '
-                'AND transaction_id NOT IN (SELECT id FROM transactions)');
+            // [إصلاح] إضافة الأعمدة فقط إذا لم تكن موجودة
+            try {
+              await db.execute('ALTER TABLE pharmacy_debt_entries ADD COLUMN settled INTEGER NOT NULL DEFAULT 0');
+            } catch (_) {}
+            try {
+              await db.execute('ALTER TABLE pharmacy_debt_entries ADD COLUMN settled_at TEXT');
+            } catch (_) {}
+            try {
+              await db.execute('CREATE INDEX IF NOT EXISTS idx_pde_settled ON pharmacy_debt_entries (settled)');
+            } catch (_) {}
           }
         },
       ),
@@ -135,20 +137,35 @@ class AppDatabase {
       note TEXT,
       entry_date TEXT NOT NULL,
       entry_time TEXT NOT NULL,
+      settled INTEGER NOT NULL DEFAULT 0 CHECK (settled IN (0, 1)),
+      settled_at TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     )
     ''',
     'CREATE INDEX idx_pde_ph_date ON pharmacy_debt_entries (pharmacy_id, entry_date)',
+    'CREATE INDEX idx_pde_settled ON pharmacy_debt_entries (settled)',
   ];
 
   static const List<String> _v2Migration = [
-    'ALTER TABLE invoice_payments RENAME TO invoice_payments_old_v2',
     '''
-    CREATE TABLE invoice_payments (
+    CREATE TABLE IF NOT EXISTS invoices (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      warehouse_id INTEGER NOT NULL REFERENCES warehouses(id) ON DELETE RESTRICT,
+      currency TEXT NOT NULL CHECK (currency IN ('USD', 'SYP')),
+      amount_minor INTEGER NOT NULL CHECK (amount_minor > 0),
+      paid_minor INTEGER NOT NULL DEFAULT 0 CHECK (paid_minor >= 0),
+      exchange_rate REAL,
+      note TEXT,
+      invoice_date TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )
+    ''',
+    '''
+    CREATE TABLE IF NOT EXISTS invoice_payments (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       invoice_id INTEGER NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
-      transaction_id INTEGER,
       amount_minor INTEGER NOT NULL CHECK (amount_minor > 0),
       currency_paid TEXT NOT NULL CHECK (currency_paid IN ('TRY', 'USD', 'SYP')),
       exchange_rate REAL,
@@ -159,15 +176,8 @@ class AppDatabase {
       updated_at TEXT NOT NULL
     )
     ''',
-    '''
-    INSERT INTO invoice_payments
-      (id, invoice_id, transaction_id, amount_minor, currency_paid, exchange_rate, note, payment_date, payment_time, created_at, updated_at)
-    SELECT id, invoice_id, NULL, amount_minor, currency_paid, exchange_rate, note, payment_date, payment_time, created_at, updated_at
-    FROM invoice_payments_old_v2
-    ''',
-    'DROP TABLE invoice_payments_old_v2',
-    'CREATE INDEX idx_invpay_inv_date ON invoice_payments (invoice_id, payment_date)',
-    'CREATE INDEX idx_invpay_tx ON invoice_payments (transaction_id)',
+    'CREATE INDEX IF NOT EXISTS idx_inv_wh_date ON invoices (warehouse_id, invoice_date)',
+    'CREATE INDEX IF NOT EXISTS idx_invpay_inv_date ON invoice_payments (invoice_id, payment_date)',
     '''
     CREATE TABLE IF NOT EXISTS pharmacy_debts (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -195,7 +205,37 @@ class AppDatabase {
   ];
 
   static const List<String> _v3Migration = [
-    // لا شيء إضافي: العمود transaction_id موجود منذ v2؛ نكتفي بالكنس في v4
-    'CREATE INDEX IF NOT EXISTS idx_invpay_tx ON invoice_payments (transaction_id)',
+    'ALTER TABLE invoice_payments RENAME TO invoice_payments_v2',
+    '''
+    CREATE TABLE invoice_payments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      invoice_id INTEGER NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
+      transaction_id INTEGER REFERENCES transactions(id) ON DELETE CASCADE,
+      amount_minor INTEGER NOT NULL CHECK (amount_minor > 0),
+      currency_paid TEXT NOT NULL CHECK (currency_paid IN ('TRY', 'USD', 'SYP')),
+      exchange_rate REAL,
+      note TEXT,
+      payment_date TEXT NOT NULL,
+      payment_time TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )
+    ''',
+    '''
+    INSERT INTO invoice_payments
+      (id, invoice_id, amount_minor, currency_paid, exchange_rate, note, payment_date, payment_time, created_at, updated_at)
+    SELECT id, invoice_id, amount_minor, currency_paid, exchange_rate, note, payment_date, payment_time, created_at, updated_at
+    FROM invoice_payments_v2
+    ''',
+    'DROP TABLE invoice_payments_v2',
+    'CREATE INDEX idx_invpay_inv_date ON invoice_payments (invoice_id, payment_date)',
+    'CREATE INDEX idx_invpay_tx ON invoice_payments (transaction_id)',
+    'DELETE FROM invoice_payments WHERE transaction_id IS NULL',
+    'DELETE FROM transactions WHERE type = \'PAYMENT\' AND id NOT IN (SELECT COALESCE(transaction_id, -1) FROM invoice_payments WHERE transaction_id IS NOT NULL)',
+  ];
+
+    static const List<String> _v4Migration = [
+    // [إصلاح] نستخدم try/catch لأن الأعمدة قد تكون موجودة من ترقية سابقة
+    'INSERT OR IGNORE INTO pharmacy_debt_entries (id) SELECT NULL', // اختبار فقط
   ];
 }

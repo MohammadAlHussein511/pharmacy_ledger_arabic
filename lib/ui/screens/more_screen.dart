@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 
-import 'warehouses_screen.dart';
-import 'weeks_screen.dart';
+import 'settings_screen.dart';
 
 class MoreScreen extends StatelessWidget {
   const MoreScreen({super.key});
@@ -15,27 +14,45 @@ class MoreScreen extends StatelessWidget {
         children: [
           Card(
             child: ListTile(
-              leading: const Icon(Icons.calendar_month_outlined),
-              title: const Text('تقرير الأسابيع'),
-              subtitle: const Text('مبيعات ومدفوعات كل أسبوع (سبت → جمعة)'),
+              leading: const Icon(Icons.info_outline),
+              title: const Text('عن التطبيق'),
+              subtitle: const Text('الإصدار 2.2.0'),
               trailing: const Icon(Icons.chevron_right),
-              onTap: () => Navigator.push(
-                context,
-                MaterialPageRoute<void>(builder: (_) => const WeeksScreen()),
-              ),
+              onTap: () {
+                showAboutDialog(
+                  context: context,
+                  applicationName: 'دفتر الصيدلية',
+                  applicationVersion: '2.2.0',
+                  applicationLegalese: '© 2026 — جميع الحقوق محفوظة',
+                  children: [
+                    const SizedBox(height: 12),
+                    const Text(
+                      'تطبيق لإدارة مبيعات ومدفوعات الصيدلية\n'
+                      'مع مزامنة سحابية آمنة بين أجهزة العمل.\n\n'
+                      'الميزات:\n'
+                      '• المبيعات والمدفوعات بعملات متعددة\n'
+                      '• فواتير المستودعات مع صرف تلقائي\n'
+                      '• ديون الصيدليات بالأدوية\n'
+                      '• تقارير يومية/أسبوعية/شهرية/سنوية\n'
+                      '• نسخ احتياطي مشفر\n'
+                      '• قفل التطبيق بـ PIN وبصمة',
+                      style: TextStyle(fontSize: 13),
+                    ),
+                  ],
+                );
+              },
             ),
           ),
           const SizedBox(height: 8),
           Card(
             child: ListTile(
-              leading: const Icon(Icons.warehouse_outlined),
-              title: const Text('المستودعات'),
-              subtitle: const Text('إضافة وتعديل المستودعات'),
+              leading: const Icon(Icons.settings_outlined),
+              title: const Text('الإعدادات'),
+              subtitle: const Text('الحساب، الأمان، المزامنة'),
               trailing: const Icon(Icons.chevron_right),
               onTap: () => Navigator.push(
                 context,
-                MaterialPageRoute<void>(
-                    builder: (_) => const WarehousesScreen(standalone: true)),
+                MaterialPageRoute(builder: (_) => const SettingsScreen()),
               ),
             ),
           ),

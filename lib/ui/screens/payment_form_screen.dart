@@ -1,8 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
-import '../../core/dates.dart';
-import '../../domain/invoice_math.dart';
 import '../../services.dart';
 
 class PaymentFormScreen extends StatefulWidget {
@@ -11,14 +9,12 @@ class PaymentFormScreen extends StatefulWidget {
     required this.invoiceId,
     required this.invoiceCurrency,
     required this.remainingMinor,
-    required this.warehouseId,
     this.invoiceRate,
   });
 
   final int invoiceId;
   final String invoiceCurrency;
   final int remainingMinor;
-  final int warehouseId;
   final double? invoiceRate;
 
   @override
@@ -33,6 +29,7 @@ class _PaymentFormScreenState extends State<PaymentFormScreen> {
   final _timeController = TextEditingController();
 
   String _currencyPaid = 'TRY';
+  int? _warehouseId;
   bool _saving = false;
 
   @override
@@ -41,11 +38,24 @@ class _PaymentFormScreenState extends State<PaymentFormScreen> {
     final n = DateTime.now();
     String two(int v) => v.toString().padLeft(2, '0');
     _dateController.text = '${n.year}-${two(n.month)}-${two(n.day)}';
-    _timeController.text = '${two(n.hour)}:${two(n.minute)}:${two(n.second)}';
+    _timeController.text = '${two(n.hour)}:${two(n.minute)}:00';
     _currencyPaid = widget.invoiceCurrency;
     if (widget.invoiceRate != null && widget.invoiceRate! > 0) {
       _rateController.text = '${widget.invoiceRate}';
     }
+    _loadWarehouseId();
+  }
+
+  // [جوهري] جلب warehouse_id من الفاتورة
+  Future<void> _loadWarehouseId() async {
+    try {
+      final services = context.read<AppServices>();
+      final invs = await services.db.query('invoices',
+          where: 'id = ?', whereArgs: [widget.invoiceId]);
+      if (invs.isNotEmpty && mounted) {
+        setState(() => _warehouseId = invs.first['warehouse_id'] as int);
+      }
+    } catch (_) {}
   }
 
   Future<void> _pickDate() async {
@@ -56,7 +66,10 @@ class _PaymentFormScreenState extends State<PaymentFormScreen> {
       lastDate: DateTime(2100),
     );
     if (picked != null) {
-      setState(() => _dateController.text = Dates.key(picked));
+      String two(int v) => v.toString().padLeft(2, '0');
+      setState(() {
+        _dateController.text = '${picked.year}-${two(picked.month)}-${two(picked.day)}';
+      });
     }
   }
 
@@ -65,7 +78,8 @@ class _PaymentFormScreenState extends State<PaymentFormScreen> {
     if (picked != null) {
       String two(int v) => v.toString().padLeft(2, '0');
       setState(() {
-        _timeController.text = '${two(picked.hour)}:${two(picked.minute)}:00';      });
+        _timeController.text = '${two(picked.hour)}:${two(picked.minute)}:00';
+      });
     }
   }
 
@@ -83,6 +97,13 @@ class _PaymentFormScreenState extends State<PaymentFormScreen> {
 
   Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
+
+    if (_warehouseId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('لا يمكن العثور على المستودع')),
+      );
+      return;
+    }
 
     final equivalent = _equivalentInInvoiceCurrency;
     if (equivalent != null && equivalent > widget.remainingMinor) {
@@ -104,13 +125,13 @@ class _PaymentFormScreenState extends State<PaymentFormScreen> {
       final amount = (double.parse(_amountController.text) * 100).round();
       final rate = _needsRate ? double.tryParse(_rateController.text) : null;
 
-      // [نهائي] transaction واحد + invoice_payment واحد مربوطان معاً
+      // [جوهري] عملية ذرية: transaction + invoice_payment مع transaction_id
       await services.db.transaction((txn) async {
         final txId = await txn.insert('transactions', {
           'type': 'PAYMENT',
           'amount_minor': amount,
           'currency': _currencyPaid,
-          'warehouse_id': widget.warehouseId,
+          'warehouse_id': _warehouseId,
           'invoice_number': null,
           'note': 'دفعة على فاتورة',
           'transaction_date': _dateController.text,

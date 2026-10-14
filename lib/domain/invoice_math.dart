@@ -132,7 +132,7 @@ Widget currencyAvatar(String code, {double radius = 20}) {
   final symbol = switch (code) {
     'USD' => '\$',
     'TRY' => '₺',
-    'SYP' => 'ل.س',
+    'SYP' => 'L.S',
     _ => code,
   };
   return CircleAvatar(

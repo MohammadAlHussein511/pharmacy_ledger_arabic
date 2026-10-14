@@ -1,7 +1,7 @@
 name: pharmacy_ledger
 description: Pharmacy Ledger. A simple, secure, offline ledger for daily pharmacy sales and warehouse payments.
 publish_to: 'none'
-version: 2.0.0+2
+version: 2.2.0+3
 
 environment:
   sdk: '>=3.6.0 <4.0.0'

@@ -1,13 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+import 'package:sqflite/sqflite.dart';
 
 import '../../core/currency.dart';
 import '../../core/dates.dart';
 import '../../core/money.dart';
 import '../../data/models/ledger_transaction.dart';
 import '../../data/models/warehouse.dart';
-import '../../domain/invoice_math.dart';
 import '../../domain/validation.dart';
 import '../../services.dart';
 import '../widgets/common.dart';
@@ -46,24 +46,16 @@ class _TransactionFormScreenState extends State<TransactionFormScreen> {
   String? _rateError;
   String? _amountError;
 
-  Map<String, int> _remaining = {};
+  int _warehouseRemainingMinor = 0;
+  String? _warehouseInvoiceCurrency;
   bool _loadingWarehouse = false;
 
   bool get _isSale => widget.type == TransactionType.sale;
   bool get _isEdit => widget.existing != null;
 
-  String? get _invoiceCurrency =>
-      _remaining.isEmpty ? null : _remaining.keys.first;
-
   bool get _needsRate {
-    if (_isSale || _invoiceCurrency == null || _currency == null) return false;
-    return _invoiceCurrency != _currency!.code;
-  }
-
-  int get _remainingForCurrency {
-    if (_currency == null) return 0;
-    return _remaining[_currency!.code] ??
-        (_needsRate ? (_remaining[_invoiceCurrency] ?? 0) : 0);
+    if (_isSale || _warehouseInvoiceCurrency == null || _currency == null) return false;
+    return _warehouseInvoiceCurrency != _currency!.code;
   }
 
   @override
@@ -85,25 +77,86 @@ class _TransactionFormScreenState extends State<TransactionFormScreen> {
         services.warehouses.byId(whId).then((w) {
           if (mounted) {
             setState(() => _warehouse = w);
-            _loadBalance(whId);
+            _loadWarehouseBalance(whId);
+          }
+        });
+      }
+      // [جديد] تحميل قيمة الصرف الحالية للدفعة المعدّلة من invoice_payments
+      if (e != null) {
+        services.db
+            .query('invoice_payments',
+                where: 'transaction_id = ?', whereArgs: [e.id])
+            .then((rows) {
+          if (rows.isNotEmpty && mounted) {
+            final r = (rows.first['exchange_rate'] as num?)?.toDouble();
+            if (r != null && r > 0) {
+              _rate.text = '$r';
+            }
           }
         });
       }
     }
   }
 
-  Future<void> _loadBalance(int warehouseId) async {
+  Future<void> _loadWarehouseBalance(int warehouseId) async {
     if (_isSale) return;
     setState(() => _loadingWarehouse = true);
     try {
       final services = context.read<AppServices>();
-      final rem = await InvoiceMath.warehouseRemaining(services.db, warehouseId);
+
+      final invoicesResult = await services.db.rawQuery('''
+        SELECT currency, SUM(amount_minor) as total
+        FROM invoices WHERE warehouse_id = ? GROUP BY currency
+      ''', [warehouseId]);
+
+      final paymentsResult = await services.db.rawQuery('''
+        SELECT i.currency as invoice_currency, ip.currency_paid,
+          SUM(ip.amount_minor) as paid_amount, ip.exchange_rate
+        FROM invoice_payments ip
+        JOIN invoices i ON ip.invoice_id = i.id
+        WHERE i.warehouse_id = ?
+        GROUP BY i.currency, ip.currency_paid, ip.exchange_rate
+      ''', [warehouseId]);
+
+      Map<String, int> invoiceTotals = {};
+      for (final r in invoicesResult) {
+        final cur = r['currency'] as String;
+        invoiceTotals[cur] = (r['total'] as num).toInt();
+      }
+
+      Map<String, int> paidTotals = {};
+      for (final r in paymentsResult) {
+        final invCur = r['invoice_currency'] as String;
+        final paidCur = r['currency_paid'] as String;
+        final paidAmount = (r['paid_amount'] as num).toInt();
+        final rate = r['exchange_rate'] as double?;
+        int equivalent;
+        if (paidCur == invCur) {
+          equivalent = paidAmount;
+        } else if (rate != null && rate > 0) {
+          equivalent = (paidAmount / rate).round();
+        } else {
+          equivalent = paidAmount;
+        }
+        paidTotals[invCur] = (paidTotals[invCur] ?? 0) + equivalent;
+      }
+
+      int remaining = 0;
+      String? invoiceCurrency;
+      if (invoiceTotals.isNotEmpty) {
+        invoiceCurrency = invoiceTotals.keys.first;
+        final totalInvoices = invoiceTotals[invoiceCurrency] ?? 0;
+        final totalPaid = paidTotals[invoiceCurrency] ?? 0;
+        remaining = totalInvoices - totalPaid;
+      }
+
       if (!mounted) return;
       setState(() {
-        _remaining = rem;
+        _warehouseRemainingMinor = remaining;
+        _warehouseInvoiceCurrency = invoiceCurrency;
         _loadingWarehouse = false;
       });
-    } catch (_) {
+    } catch (e) {
       if (!mounted) return;
       setState(() => _loadingWarehouse = false);
     }
@@ -137,16 +190,88 @@ class _TransactionFormScreenState extends State<TransactionFormScreen> {
         _warehouse = w;
         _warehouseError = null;
       });
-      _loadBalance(w.id!);
+      _loadWarehouseBalance(w.id!);
     }
   }
 
-  int _toInvoiceEquivalent(int minorInPaid, double? rate) {
-    final invCur = _invoiceCurrency;
-    if (invCur == null) return 0;
-    if (_currency?.code == invCur) return minorInPaid;
-    if (rate == null || rate <= 0) return 0;
-    return (minorInPaid / rate).round();
+  Future<void> _autoLinkToFIFOInvoices({
+    required int amountMinor,
+    required String currency,
+    required int warehouseId,
+    required double? exchangeRate,
+    required int transactionId,
+  }) async {
+    final services = context.read<AppServices>();
+    final db = services.db;
+
+    final invoices = await db.rawQuery('''
+      SELECT i.id, i.currency, i.amount_minor,
+        COALESCE((
+          SELECT SUM(
+            CASE
+              WHEN ip.currency_paid = i.currency THEN ip.amount_minor
+              WHEN ip.exchange_rate IS NOT NULL AND ip.exchange_rate > 0
+                THEN CAST(ROUND(ip.amount_minor * 1.0 / ip.exchange_rate) AS INTEGER)
+              ELSE 0
+            END
+          ) FROM invoice_payments ip WHERE ip.invoice_id = i.id
+        ), 0) as paid_minor
+      FROM invoices i WHERE i.warehouse_id = ?
+      ORDER BY i.invoice_date ASC, i.id ASC
+    ''', [warehouseId]);
+
+    final list = <Map<String, dynamic>>[];
+    for (final r in invoices) {
+      final amount = r['amount_minor'] as int;
+      final paid = (r['paid_minor'] as num).toInt();
+      if (paid < amount) {
+        list.add({
+          'id': r['id'],
+          'currency': r['currency'],
+          'amount': amount,
+          'paid': paid,
+          'remaining': amount - paid,
+        });
+      }
+    }
+
+    int remainingToApply = amountMinor;
+    final now = DateTime.now().toIso8601String();
+    final today = DateTime.now();
+    String two(int v) => v.toString().padLeft(2, '0');
+    final paymentDate = '${today.year}-${two(today.month)}-${two(today.day)}';
+    final paymentTime = '${two(today.hour)}:${two(today.minute)}:${two(today.second)}';
+
+    for (final inv in list) {
+      if (remainingToApply <= 0) break;
+      final invRemaining = inv['remaining'] as int;
+      final invCurrency = inv['currency'] as String;
+      int paymentAmount;
+      double? rateToUse;
+      if (currency == invCurrency) {
+        paymentAmount = remainingToApply < invRemaining ? remainingToApply : invRemaining;
+      } else {
+        if (exchangeRate == null || exchangeRate <= 0) continue;
+        rateToUse = exchangeRate;
+        final maxInPaidCurrency = (invRemaining * exchangeRate).round();
+        paymentAmount = remainingToApply < maxInPaidCurrency ? remainingToApply : maxInPaidCurrency;
+      }
+      if (paymentAmount <= 0) continue;
+
+      await db.insert('invoice_payments', {
+        'invoice_id': inv['id'],
+        'transaction_id': transactionId,
+        'amount_minor': paymentAmount,
+        'currency_paid': currency,
+        'exchange_rate': rateToUse,
+        'note': 'خصم تلقائي من دفعة',
+        'payment_date': paymentDate,
+        'payment_time': paymentTime,
+        'created_at': now,
+        'updated_at': now,
+      });
+      remainingToApply -= paymentAmount;
+    }
   }
 
   Future<void> _save() async {
@@ -170,58 +295,39 @@ class _TransactionFormScreenState extends State<TransactionFormScreen> {
     }
 
     if (!formOk || _warehouseError != null || _currencyError != null) return;
-
     final minor = Money.parseToMinor(_amount.text)!;
-    final services = context.read<AppServices>();
 
-    if (!_isSale) {
-      // منع الدفع لمستودع بلا فواتير
-      final invCount = await services.db.rawQuery(
-          'SELECT COUNT(*) as c FROM invoices WHERE warehouse_id = ?',
-          [_warehouse!.id]);
-      final count = (invCount.first['c'] as num).toInt();
-      if (count == 0 && !_isEdit) {
+    if (!_isSale && !_isEdit) {
+      final services = context.read<AppServices>();
+      final invoiceCount = Sqflite.firstIntValue(
+          await services.db.rawQuery(
+              'SELECT COUNT(*) FROM invoices WHERE warehouse_id = ?',
+              [_warehouse!.id])) ??
+          0;
+      if (invoiceCount == 0) {
         setState(() {
-          _warehouseError =
-              'لا توجد فواتير لهذا المستودع. أدخل فاتورة من قسم الحسابات أولاً.';
+          _warehouseError = 'لا توجد فواتير لهذا المستودع. أدخل فاتورة من قسم الحسابات أولاً.';
         });
         return;
       }
+    }
 
-      // منع تجاوز الرصيد الموحد (مع السماح بقيمة الدفعة الحالية عند التعديل)
-      final invCur = _invoiceCurrency;
-      if (invCur != null) {
-        int allowed = _remaining[invCur] ?? 0;
-        if (_isEdit && widget.existing!.type == TransactionType.payment) {
-          final e = widget.existing!;
-          // أضف قيمة الدفعة القديمة للسماح بتعديلها
-          final oldPays = await services.db.rawQuery(
-              'SELECT amount_minor, currency_paid, exchange_rate FROM invoice_payments WHERE transaction_id = ?',
-              [e.id]);
-          if (oldPays.isNotEmpty) {
-            final o = oldPays.first;
-            final oc = o['currency_paid'] as String;
-            final oa = o['amount_minor'] as int;
-            final orate = (o['exchange_rate'] as num?)?.toDouble();
-            allowed += oc == invCur ? oa : (orate != null && orate > 0 ? (oa / orate).round() : 0);
-          } else {
-            allowed += e.amountMinor;
-          }
-        }
-        final equivalent = _needsRate
-            ? (rateValue != null && rateValue > 0 ? (minor / rateValue).round() : minor)
-            : minor;
-        if (equivalent > allowed) {
-          setState(() {
-            _amountError =
-                'الدفعة (${Money.format(equivalent, Currency.fromCode(invCur))}) '
-                'تتجاوز الرصيد المتبقي (${Money.format(allowed, Currency.fromCode(invCur))})';
-          });
-          return;
-        }
+    if (!_isSale && _warehouseRemainingMinor > 0 && _warehouseInvoiceCurrency != null) {
+      int equivalentMinor = minor;
+      if (_needsRate && rateValue != null && rateValue > 0) {
+        equivalentMinor = (minor / rateValue).round();
+      }
+      if (equivalentMinor > _warehouseRemainingMinor) {
+        final invoiceCur = Currency.fromCode(_warehouseInvoiceCurrency!);
+        setState(() {
+          _amountError = 'الدفعة (${Money.format(equivalentMinor, invoiceCur)}) '
+              'تتجاوز الرصيد المتبقي (${Money.format(_warehouseRemainingMinor, invoiceCur)})';
+        });
+        return;
       }
     }
 
+    final services = context.read<AppServices>();
     final repo = services.transactions;
     final now = DateTime.now();
     setState(() => _saving = true);
@@ -240,6 +346,19 @@ class _TransactionFormScreenState extends State<TransactionFormScreen> {
           date: Dates.key(_day),
           time: e.time,
         ));
+        // [جوهري] كتابة قيمة الصرف في invoice_payments المرتبطة
+        // (تُكتب حتى لو null لكي تُمسح عند تساوي العملات)
+        if (!_isSale) {
+          await services.db.update(
+            'invoice_payments',
+            {
+              'exchange_rate': rateValue,
+              'updated_at': now.toIso8601String(),
+            },
+            where: 'transaction_id = ?',
+            whereArgs: [e.id],
+          );
+        }
       } else if (_isSale) {
         await repo.insert(LedgerTransaction.newSale(amountMinor: minor, day: _day, now: now)
             .copyWith(note: _note.text));
@@ -256,33 +375,38 @@ class _TransactionFormScreenState extends State<TransactionFormScreen> {
         final txId = await repo.insert(tx);
         await services.settings.setLastPaymentCurrency(_currency!);
 
-        // [نهائي] صف دفع واحد مربوط بالفاتورة الأولى المفتوحة + بالـ transaction
-        final invId = await InvoiceMath.firstOpenInvoice(services.db, _warehouse!.id!);
-        if (invId != null) {
-          final ts = DateTime.now();
-          String two(int v) => v.toString().padLeft(2, '0');
-          await services.db.insert('invoice_payments', {
-            'invoice_id': invId,
-            'transaction_id': txId,
-            'amount_minor': minor,
-            'currency_paid': _currency!.code,
-            'exchange_rate': rateValue,
-            'note': _note.text.isEmpty ? 'دفعة على فاتورة' : _note.text,
-            'payment_date': Dates.key(_day),
-            'payment_time': '${two(ts.hour)}:${two(ts.minute)}:${two(ts.second)}',
-            'created_at': now.toIso8601String(),
-            'updated_at': now.toIso8601String(),
-          });
+        if (_warehouseRemainingMinor > 0) {
+          try {
+            await _autoLinkToFIFOInvoices(
+              amountMinor: minor,
+              currency: _currency!.code,
+              warehouseId: _warehouse!.id!,
+              exchangeRate: rateValue,
+              transactionId: txId,
+            );
+          } catch (e) {
+            debugPrint('[FIFO] error: $e');
+          }
         }
       }
 
       if (!mounted) return;
-      showMessage(context, _isEdit ? 'تم حفظ التغييرات.' : (_isSale ? 'تم حفظ البيع.' : 'تم حفظ الدفعة.'));
+      String msg;
+      if (_isEdit) {
+        msg = 'تم حفظ التغييرات.';
+      } else if (_isSale) {
+        msg = 'تم حفظ البيع.';
+      } else {
+        msg = _warehouseRemainingMinor > 0
+            ? 'تم حفظ الدفعة وخصمها من الفواتير تلقائياً.'
+            : 'تم حفظ الدفعة.';
+      }
+      showMessage(context, msg);
       Navigator.pop(context);
     } on ValidationException catch (e) {
       if (mounted) showMessage(context, e.message);
     } catch (_) {
-      if (mounted) showMessage(context, 'تعذّر الحفظ. لم تتغير بياناتك. يرجى المحاولة مرة أخرى.');
+      if (mounted) showMessage(context, 'تعذّر الحفظ. يرجى المحاولة مرة أخرى.');
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -295,9 +419,6 @@ class _TransactionFormScreenState extends State<TransactionFormScreen> {
         ? (_isSale ? 'تعديل بيع' : 'تعديل دفعة')
         : (_isSale ? 'إضافة بيع' : 'إضافة دفعة');
     final isToday = Dates.isSameDay(_day, DateTime.now());
-    final remText = _remaining.entries
-        .map((e) => Money.format(e.value, Currency.fromCode(e.key)))
-        .join(' + ');
 
     return Scaffold(
       appBar: AppBar(title: Text(title)),
@@ -339,7 +460,7 @@ class _TransactionFormScreenState extends State<TransactionFormScreen> {
                           _warehouse = w;
                           _warehouseError = null;
                         });
-                        _loadBalance(w.id!);
+                        _loadWarehouseBalance(w.id!);
                       }
                     },
                     icon: const Icon(Icons.add),
@@ -350,7 +471,7 @@ class _TransactionFormScreenState extends State<TransactionFormScreen> {
                   const Padding(
                       padding: EdgeInsets.symmetric(vertical: 8),
                       child: LinearProgressIndicator())
-                else if (_remaining.isNotEmpty && _warehouse != null) ...[
+                else if (_warehouseRemainingMinor > 0 && _warehouse != null) ...[
                   const SizedBox(height: 8),
                   Card(
                     color: Theme.of(context).colorScheme.primaryContainer,
@@ -362,7 +483,8 @@ class _TransactionFormScreenState extends State<TransactionFormScreen> {
                         const SizedBox(width: 8),
                         Expanded(
                           child: Text(
-                            'الرصيد المتبقي على ${_warehouse!.name}: $remText',
+                            'الرصيد المتبقي على ${_warehouse!.name}: '
+                            '${Money.format(_warehouseRemainingMinor, Currency.fromCode(_warehouseInvoiceCurrency!))}',
                             style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                                 color: Theme.of(context).colorScheme.onPrimaryContainer,
                                 fontWeight: FontWeight.w600),
@@ -433,7 +555,8 @@ class _TransactionFormScreenState extends State<TransactionFormScreen> {
                   keyboardType: const TextInputType.numberWithOptions(decimal: true),
                   decoration: InputDecoration(
                     hintText: 'مثال: 34.5',
-                    helperText: 'كم ${_currency?.code ?? ''} مقابل 1 ${_invoiceCurrency ?? ''}',
+                    helperText:
+                        'كم ${_currency?.code ?? ''} مقابل 1 ${_warehouseInvoiceCurrency ?? ''}',
                     errorText: _rateError,
                     border: const OutlineInputBorder(),
                   ),
@@ -494,7 +617,6 @@ class _TransactionFormScreenState extends State<TransactionFormScreen> {
 class _FieldLabel extends StatelessWidget {
   const _FieldLabel(this.text);
   final String text;
-
   @override
   Widget build(BuildContext context) => Padding(
         padding: const EdgeInsets.only(bottom: 6, left: 2),
@@ -504,8 +626,7 @@ class _FieldLabel extends StatelessWidget {
 
 class _DecimalCommaFormatter extends TextInputFormatter {
   @override
-  TextEditingValue formatEditUpdate(
-      TextEditingValue oldValue, TextEditingValue newValue) {
+  TextEditingValue formatEditUpdate(TextEditingValue oldValue, TextEditingValue newValue) {
     final text = newValue.text.replaceAll(',', '.');
     final firstDot = text.indexOf('.');
     if (firstDot != -1) {

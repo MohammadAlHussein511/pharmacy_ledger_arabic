@@ -1,6 +1,6 @@
-import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+
 import '../../services.dart';
 import 'debt_entry_form_screen.dart';
 
@@ -9,7 +9,8 @@ class PharmacyDebtDetailScreen extends StatefulWidget {
   final int pharmacyId;
 
   @override
-  State<PharmacyDebtDetailScreen> createState() => _PharmacyDebtDetailScreenState();
+  State<PharmacyDebtDetailScreen> createState() =>
+      _PharmacyDebtDetailScreenState();
 }
 
 class _Entry {
@@ -19,15 +20,16 @@ class _Entry {
     required this.item,
     required this.date,
     required this.time,
+    required this.settled,
     required this.settledAt,
     required this.raw,
   });
-
   final int id;
   final String direction;
   final String item;
   final String date;
   final String time;
+  final int settled;
   final String? settledAt;
   final Map<String, Object?> raw;
 }
@@ -36,6 +38,7 @@ class _PharmacyDebtDetailScreenState extends State<PharmacyDebtDetailScreen> {
   String? _pharmacyName;
   List<_Entry> _entries = [];
   bool _loading = true;
+  String _filter = 'active'; // 'all' | 'active' | 'settled'
 
   @override
   void initState() {
@@ -47,45 +50,37 @@ class _PharmacyDebtDetailScreenState extends State<PharmacyDebtDetailScreen> {
     setState(() => _loading = true);
     try {
       final services = context.read<AppServices>();
-      
-      // إضافة حقل settled_at إذا لم يكن موجوداً
-      try {
-        await services.db.execute('ALTER TABLE pharmacy_debt_entries ADD COLUMN settled_at TEXT');
-      } catch (e) {
-        // الحقل موجود مسبقاً
-      }
+      final db = services.db;
 
-      final bytes = await services.backup.createBackup();
-      final env = jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>;
-      final data = env['data'] as Map<String, dynamic>;
-      final phs = (data['pharmacy_debts'] as List? ?? []).cast<Map<String, dynamic>>();
-      final entries = (data['pharmacy_debt_entries'] as List? ?? []).cast<Map<String, dynamic>>();
-
-      final ph = phs.firstWhere((p) => p['id'] == widget.pharmacyId, orElse: () => <String, Object?>{});
-      if (ph.isEmpty) {
+      final phs = await db.query('pharmacy_debts',
+          where: 'id = ?', whereArgs: [widget.pharmacyId]);
+      if (phs.isEmpty) {
         if (!mounted) return;
         setState(() => _loading = false);
         return;
       }
 
-      final myEntries = entries
-          .where((e) => e['pharmacy_id'] == widget.pharmacyId)
-          .map((e) => _Entry(
-                id: e['id'] as int,
-                direction: e['direction'] as String,
-                item: (e['note'] as String?) ?? '—',
-                date: e['entry_date'] as String,
-                time: e['entry_time'] as String,
-                settledAt: e['settled_at'] as String?,
-                raw: e.cast<String, Object?>(),
-              ))
-          .toList()
-        ..sort((a, b) => '${b.date} ${b.time}'.compareTo('${a.date} ${a.time}'));
+      final entries = await db.query('pharmacy_debt_entries',
+          where: 'pharmacy_id = ?',
+          whereArgs: [widget.pharmacyId],
+          orderBy: 'entry_date DESC, entry_time DESC, id DESC');
 
       if (!mounted) return;
       setState(() {
-        _pharmacyName = ph['name'] as String;
-        _entries = myEntries;
+        _pharmacyName = phs.first['name'] as String;
+        _entries = [
+          for (final e in entries)
+            _Entry(
+              id: e['id'] as int,
+              direction: e['direction'] as String,
+              item: (e['note'] as String?) ?? '—',
+              date: e['entry_date'] as String,
+              time: e['entry_time'] as String,
+              settled: (e['settled'] as int?) ?? 0,
+              settledAt: e['settled_at'] as String?,
+              raw: e.cast<String, Object?>(),
+            ),
+        ];
         _loading = false;
       });
     } catch (_) {
@@ -94,15 +89,42 @@ class _PharmacyDebtDetailScreenState extends State<PharmacyDebtDetailScreen> {
     }
   }
 
-  int get _toUs => _entries.where((e) => e.direction == 'OWED_TO_US' && e.settledAt == null).length;
-  int get _byUs => _entries.where((e) => e.direction == 'OWED_BY_US' && e.settledAt == null).length;
+  int get _toUs => _entries.where((e) => e.direction == 'OWED_TO_US' && e.settled == 0).length;
+  int get _byUs => _entries.where((e) => e.direction == 'OWED_BY_US' && e.settled == 0).length;
+  int get _settledCount => _entries.where((e) => e.settled == 1).length;
+
+  List<_Entry> get _filtered {
+    if (_filter == 'active') return _entries.where((e) => e.settled == 0).toList();
+    if (_filter == 'settled') return _entries.where((e) => e.settled == 1).toList();
+    return _entries;
+  }
+
+  Future<void> _toggleSettle(_Entry e) async {
+    final services = context.read<AppServices>();
+    final now = DateTime.now().toIso8601String();
+    final newSettled = e.settled == 0 ? 1 : 0;
+    await services.db.update(
+      'pharmacy_debt_entries',
+      {
+        'settled': newSettled,
+        'settled_at': newSettled == 1 ? now : null,
+        'updated_at': now,
+      },
+      where: 'id = ?',
+      whereArgs: [e.id],
+    );
+    services.store.changed();
+    _load();
+  }
 
   Future<void> _editEntry(_Entry e) async {
     final result = await Navigator.push<bool>(
       context,
-      MaterialPageRoute(builder: (_) => DebtEntryFormScreen(pharmacyId: widget.pharmacyId, existing: e.raw)),
+      MaterialPageRoute(
+          builder: (_) =>
+              DebtEntryFormScreen(pharmacyId: widget.pharmacyId, existing: e.raw)),
     );
-    if (result == true) _load();
+    if (result == true && mounted) _load();
   }
 
   Future<void> _deleteEntry(_Entry e) async {
@@ -112,79 +134,22 @@ class _PharmacyDebtDetailScreenState extends State<PharmacyDebtDetailScreen> {
         title: const Text('حذف الحركة؟'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('إلغاء')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('حذف')),
-        ],
-      ),
-    );
-
-    if (ok != true || !mounted) return;
-
-    final services = context.read<AppServices>();
-    await services.db.delete('pharmacy_debt_entries', where: 'id = ?', whereArgs: [e.id]);
-    services.store.changed();
-    _load();
-  }
-
-  Future<void> _settleEntry(_Entry e) async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('تسديد الحركة؟'),
-        content: const Text('سيتم نقل هذه الحركة إلى سجل التسديدات.'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('إلغاء')),
           FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: Colors.green),
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('تسديد')),
+              style: FilledButton.styleFrom(backgroundColor: Theme.of(ctx).colorScheme.error),
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('حذف')),
         ],
       ),
     );
-
     if (ok != true || !mounted) return;
-
     final services = context.read<AppServices>();
-    final now = DateTime.now().toIso8601String();
-    await services.db.update(
-      'pharmacy_debt_entries',
-      {'settled_at': now},
-      where: 'id = ?',
-      whereArgs: [e.id],
-    );
+    await services.db.delete('pharmacy_debt_entries',
+        where: 'id = ?', whereArgs: [e.id]);
     services.store.changed();
     _load();
   }
 
-  Future<void> _unsettleEntry(_Entry e) async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('إلغاء التسديد؟'),
-        content: const Text('سيتم إعادة هذه الحركة إلى سجل الحركات النشطة.'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('إلغاء')),
-          FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: Colors.orange),
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('إلغاء التسديد')),
-        ],
-      ),
-    );
-
-    if (ok != true || !mounted) return;
-
-    final services = context.read<AppServices>();
-    await services.db.update(
-      'pharmacy_debt_entries',
-      {'settled_at': null},
-      where: 'id = ?',
-      whereArgs: [e.id],
-    );
-    services.store.changed();
-    _load();
-  }
-
-  Future<void> _delete() async {
+  Future<void> _deletePharmacy() async {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -199,14 +164,15 @@ class _PharmacyDebtDetailScreenState extends State<PharmacyDebtDetailScreen> {
         ],
       ),
     );
-
     if (ok != true || !mounted) return;
-
     final services = context.read<AppServices>();
-    await services.db.delete('pharmacy_debt_entries', where: 'pharmacy_id = ?', whereArgs: [widget.pharmacyId]);
-    await services.db.delete('pharmacy_debts', where: 'id = ?', whereArgs: [widget.pharmacyId]);
+    await services.db.transaction((txn) async {
+      await txn.delete('pharmacy_debt_entries',
+          where: 'pharmacy_id = ?', whereArgs: [widget.pharmacyId]);
+      await txn.delete('pharmacy_debts',
+          where: 'id = ?', whereArgs: [widget.pharmacyId]);
+    });
     services.store.changed();
-
     if (!mounted) return;
     Navigator.pop(context);
   }
@@ -214,21 +180,22 @@ class _PharmacyDebtDetailScreenState extends State<PharmacyDebtDetailScreen> {
   @override
   Widget build(BuildContext context) {
     if (_loading) {
-      return Scaffold(appBar: AppBar(), body: const Center(child: CircularProgressIndicator()));
+      return Scaffold(
+          appBar: AppBar(), body: const Center(child: CircularProgressIndicator()));
     }
-
     if (_pharmacyName == null) {
       return Scaffold(appBar: AppBar(), body: const Center(child: Text('لم تعد موجودة')));
     }
-
     final t = Theme.of(context).textTheme;
-    final activeEntries = _entries.where((e) => e.settledAt == null).toList();
-    final settledEntries = _entries.where((e) => e.settledAt != null).toList();
-
     return Scaffold(
       appBar: AppBar(
         title: Text(_pharmacyName!),
-        actions: [IconButton(tooltip: 'حذف', icon: const Icon(Icons.delete_outline), onPressed: _delete)],
+        actions: [
+          IconButton(
+              tooltip: 'حذف الصيدلية',
+              icon: const Icon(Icons.delete_outline),
+              onPressed: _deletePharmacy),
+        ],
       ),
       body: RefreshIndicator(
         onRefresh: _load,
@@ -242,9 +209,11 @@ class _PharmacyDebtDetailScreenState extends State<PharmacyDebtDetailScreen> {
                   child: Padding(
                     padding: const EdgeInsets.all(12),
                     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      Text('لنا عندهم', style: t.bodySmall?.copyWith(color: Colors.green.shade700)),
+                      Text('لنا عندهم (غير مسدّدة)',
+                          style: t.bodySmall?.copyWith(color: Colors.green.shade700)),
                       const SizedBox(height: 4),
-                      Text('$_toUs صنف', style: t.titleMedium?.copyWith(color: Colors.green.shade900)),
+                      Text('$_toUs صنف',
+                          style: t.titleMedium?.copyWith(color: Colors.green.shade900)),
                     ]),
                   ),
                 ),
@@ -256,23 +225,37 @@ class _PharmacyDebtDetailScreenState extends State<PharmacyDebtDetailScreen> {
                   child: Padding(
                     padding: const EdgeInsets.all(12),
                     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      Text('علينا لهم', style: t.bodySmall?.copyWith(color: Colors.red.shade700)),
+                      Text('علينا لهم (غير مسدّدة)',
+                          style: t.bodySmall?.copyWith(color: Colors.red.shade700)),
                       const SizedBox(height: 4),
-                      Text('$_byUs صنف', style: t.titleMedium?.copyWith(color: Colors.red.shade900)),
+                      Text('$_byUs صنف',
+                          style: t.titleMedium?.copyWith(color: Colors.red.shade900)),
                     ]),
                   ),
                 ),
               ),
             ]),
+            const SizedBox(height: 8),
+            SegmentedButton<String>(
+              showSelectedIcon: false,
+              segments: const [
+                ButtonSegment(value: 'active', label: Text('نشطة')),
+                ButtonSegment(value: 'settled', label: Text('مسدّدة')),
+                ButtonSegment(value: 'all', label: Text('الكل')),
+              ],
+              selected: {_filter},
+              onSelectionChanged: (s) => setState(() => _filter = s.first),
+            ),
             const SizedBox(height: 16),
             Row(children: [
-              Text('سجل الحركات (${activeEntries.length})', style: t.titleMedium),
+              Text('السجل (${_filtered.length})', style: t.titleMedium),
               const Spacer(),
               FilledButton.icon(
                 onPressed: () async {
                   await Navigator.push(
                     context,
-                    MaterialPageRoute(builder: (_) => DebtEntryFormScreen(pharmacyId: widget.pharmacyId)),
+                    MaterialPageRoute(
+                        builder: (_) => DebtEntryFormScreen(pharmacyId: widget.pharmacyId)),
                   );
                   _load();
                 },
@@ -281,67 +264,81 @@ class _PharmacyDebtDetailScreenState extends State<PharmacyDebtDetailScreen> {
               ),
             ]),
             const SizedBox(height: 8),
-            if (activeEntries.isEmpty)
-              const Card(child: ListTile(title: Text('لا توجد حركات نشطة')))
+            if (_filtered.isEmpty)
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Center(
+                    child: Text(_filter == 'settled'
+                        ? 'لا توجد حركات مسدّدة'
+                        : 'لا توجد حركات',
+                        style: t.bodyLarge),
+                  ),
+                ),
+              )
             else
-              ...activeEntries.map((e) {
+              ..._filtered.map((e) {
                 final isToUs = e.direction == 'OWED_TO_US';
+                final isSettled = e.settled == 1;
                 return Card(
                   margin: const EdgeInsets.symmetric(vertical: 4),
+                  color: isSettled
+                      ? Theme.of(context).colorScheme.surfaceContainerHighest
+                      : null,
                   child: ListTile(
                     leading: CircleAvatar(
                       backgroundColor: isToUs ? Colors.green.shade50 : Colors.red.shade50,
-                      child: Icon(isToUs ? Icons.arrow_downward : Icons.arrow_upward,
-                          color: isToUs ? Colors.green : Colors.red),
+                      child: Icon(
+                        isSettled ? Icons.check_circle_outline : (isToUs ? Icons.arrow_downward : Icons.arrow_upward),
+                        color: isToUs ? Colors.green : Colors.red,
+                      ),
                     ),
-                    title: Text(e.item),
-                    subtitle: Text('${isToUs ? 'لنا عندهم' : 'علينا لهم'} · ${e.date} ${e.time}'),
+                    title: Text(
+                      e.item,
+                      style: isSettled
+                          ? const TextStyle(decoration: TextDecoration.lineThrough)
+                          : null,
+                    ),
+                    subtitle: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '${isToUs ? 'لنا عندهم' : 'علينا لهم'} · ${e.date} ${e.time}',
+                          style: isSettled
+                              ? TextStyle(color: Theme.of(context).colorScheme.outline)
+                              : null,
+                        ),
+                        if (isSettled && e.settledAt != null)
+                          Text(
+                            '✓ سُدّدت في ${e.settledAt!.substring(0, 16)}',
+                            style: TextStyle(
+                                color: Colors.green.shade700,
+                                fontSize: 11,
+                                fontStyle: FontStyle.italic),
+                          ),
+                      ],
+                    ),
                     trailing: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         IconButton(
-                          tooltip: 'تسديد',
-                          icon: const Icon(Icons.check_circle_outline, color: Colors.green, size: 20),
-                          onPressed: () => _settleEntry(e),
+                          tooltip: isSettled ? 'إلغاء التسديد' : 'تسديد',
+                          icon: Icon(
+                            isSettled ? Icons.undo : Icons.check,
+                            size: 20,
+                            color: isSettled ? Colors.orange : Colors.green,
+                          ),
+                          onPressed: () => _toggleSettle(e),
                         ),
                         IconButton(
-                          tooltip: 'تعديل',
-                          icon: const Icon(Icons.edit_outlined, size: 20),
-                          onPressed: () => _editEntry(e),
-                        ),
+                            tooltip: 'تعديل',
+                            icon: const Icon(Icons.edit_outlined, size: 20),
+                            onPressed: () => _editEntry(e)),
                         IconButton(
-                          tooltip: 'حذف',
-                          icon: const Icon(Icons.delete_outline, size: 20),
-                          onPressed: () => _deleteEntry(e),
-                        ),
+                            tooltip: 'حذف',
+                            icon: const Icon(Icons.delete_outline, size: 20),
+                            onPressed: () => _deleteEntry(e)),
                       ],
-                    ),
-                  ),
-                );
-              }),
-            const SizedBox(height: 24),
-            Text('سجل التسديدات (${settledEntries.length})', style: t.titleMedium),
-            const SizedBox(height: 8),
-            if (settledEntries.isEmpty)
-              const Card(child: ListTile(title: Text('لا توجد حركات مسددة')))
-            else
-              ...settledEntries.map((e) {
-                final isToUs = e.direction == 'OWED_TO_US';
-                final settledDate = e.settledAt != null ? e.settledAt!.substring(0, 10) : '';
-                return Card(
-                  margin: const EdgeInsets.symmetric(vertical: 4),
-                  color: Colors.grey.shade100,
-                  child: ListTile(
-                    leading: CircleAvatar(
-                      backgroundColor: Colors.grey.shade200,
-                      child: const Icon(Icons.check, color: Colors.green),
-                    ),
-                    title: Text(e.item, style: const TextStyle(decoration: TextDecoration.lineThrough)),
-                    subtitle: Text('${isToUs ? 'لنا عندهم' : 'علينا لهم'} · سُدّت في $settledDate'),
-                    trailing: IconButton(
-                      tooltip: 'إلغاء التسديد',
-                      icon: const Icon(Icons.undo, color: Colors.orange, size: 20),
-                      onPressed: () => _unsettleEntry(e),
                     ),
                   ),
                 );

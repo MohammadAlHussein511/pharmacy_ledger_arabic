@@ -95,7 +95,8 @@ class BackupService {
   static const _pdCols = ['id', 'name', 'name_key', 'created_at', 'updated_at'];
   static const _pdeCols = [
     'id', 'pharmacy_id', 'direction', 'amount_minor', 'currency',
-    'note', 'entry_date', 'entry_time', 'created_at', 'updated_at',
+    'note', 'entry_date', 'entry_time', 'settled', 'settled_at',
+    'created_at', 'updated_at',
   ];
 
   String suggestedFileName() {

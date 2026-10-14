@@ -53,22 +53,18 @@ class TransactionRepository {
 
   Future<List<LedgerTransaction>> onDay(DateTime day) async {
     final key = Dates.key(day);
-    final rows = await _db.query(
-      'transactions',
-      where: 'transaction_date = ?',
-      whereArgs: [key],
-      orderBy: 'transaction_time DESC, id DESC',
-    );
+    final rows = await _db.query('transactions',
+        where: 'transaction_date = ?',
+        whereArgs: [key],
+        orderBy: 'transaction_time DESC, id DESC');
     return rows.map(_fromRow).toList();
   }
 
   Future<List<LedgerTransaction>> paymentsForWarehouse(int warehouseId) async {
-    final rows = await _db.query(
-      'transactions',
-      where: 'type = ? AND warehouse_id = ?',
-      whereArgs: ['PAYMENT', warehouseId],
-      orderBy: 'transaction_date DESC, transaction_time DESC, id DESC',
-    );
+    final rows = await _db.query('transactions',
+        where: 'type = ? AND warehouse_id = ?',
+        whereArgs: ['PAYMENT', warehouseId],
+        orderBy: 'transaction_date DESC, transaction_time DESC, id DESC');
     return rows.map(_fromRow).toList();
   }
 
@@ -80,17 +76,13 @@ class TransactionRepository {
     final rows = await _db.rawQuery(sql, args);
     final result = <Currency, int>{};
     for (final r in rows) {
-      final cur = Currency.fromCode(r['currency'] as String);
-      result[cur] = (r['total'] as num).toInt();
+      result[Currency.fromCode(r['currency'] as String)] = (r['total'] as num).toInt();
     }
     return result;
   }
 
-  Future<List<LedgerTransaction>> search(
-    TransactionFilter filter, {
-    int limit = 50,
-    int offset = 0,
-  }) async {
+  Future<List<LedgerTransaction>> search(TransactionFilter filter,
+      {int limit = 50, int offset = 0}) async {
     final (where, args) = _buildWhere(filter);
     final sql = where.isEmpty
         ? 'SELECT * FROM transactions ORDER BY transaction_date DESC, transaction_time DESC, id DESC LIMIT ? OFFSET ?'
@@ -149,13 +141,18 @@ class TransactionRepository {
     return id;
   }
 
-  /// [نهائي] تعديل transaction + دفعته المرتبطة معاً (صف واحد لكل منهما)
+  /// [جوهري] تعديل مع شفاء ذاتي: إذا لم تُوجد الدفعة المرتبطة،
+  /// نصلح الربط تلقائياً ثم نعدّل الجدولين معاً.
   Future<void> update(LedgerTransaction tx) async {
     if (tx.id == null) throw ArgumentError('Cannot update unsaved transaction');
     _validate(tx);
     final now = DateTime.now().toIso8601String();
 
     await _db.transaction((txn) async {
+      final oldRows =
+          await txn.query('transactions', where: 'id = ?', whereArgs: [tx.id]);
+      final old = oldRows.isEmpty ? null : oldRows.first;
+
       await txn.update(
         'transactions',
         {
@@ -173,7 +170,7 @@ class TransactionRepository {
       );
 
       if (tx.type == TransactionType.payment) {
-        await txn.update(
+        final changes = await txn.update(
           'invoice_payments',
           {
             'amount_minor': tx.amountMinor,
@@ -185,17 +182,68 @@ class TransactionRepository {
           where: 'transaction_id = ?',
           whereArgs: [tx.id],
         );
+
+        // [شفاء ذاتي] لا يوجد صف مرتبط؟ نصلح الربط الآن
+        if (changes == 0 && old != null && tx.warehouseId != null) {
+          final orphans = await txn.query(
+            'invoice_payments',
+            where: 'amount_minor = ? AND currency_paid = ? '
+                'AND invoice_id IN (SELECT id FROM invoices WHERE warehouse_id = ?)',
+            whereArgs: [
+              old['amount_minor'],
+              old['currency'],
+              tx.warehouseId,
+            ],
+            limit: 1,
+          );
+          if (orphans.isNotEmpty) {
+            await txn.update(
+              'invoice_payments',
+              {
+                'transaction_id': tx.id,
+                'amount_minor': tx.amountMinor,
+                'currency_paid': tx.currency.code,
+                'note': tx.note,
+                'payment_date': tx.date,
+                'updated_at': now,
+              },
+              where: 'id = ?',
+              whereArgs: [orphans.first['id']],
+            );
+          }
+        }
       }
     });
 
     onChanged();
   }
 
-  /// [نهائي] حذف transaction + دفعته المرتبطة معاً
+  /// [جوهري] حذف مع شفاء ذاتي: يحذف الصف المرتبط، وإن لم يوجد يصلح ثم يحذف.
   Future<void> delete(int id) async {
     await _db.transaction((txn) async {
-      await txn.delete('invoice_payments',
+      final oldRows =
+          await txn.query('transactions', where: 'id = ?', whereArgs: [id]);
+      final old = oldRows.isEmpty ? null : oldRows.first;
+
+      final changes = await txn.delete('invoice_payments',
           where: 'transaction_id = ?', whereArgs: [id]);
+
+      if (changes == 0 &&
+          old != null &&
+          old['type'] == 'PAYMENT' &&
+          old['warehouse_id'] != null) {
+        await txn.delete(
+          'invoice_payments',
+          where: 'amount_minor = ? AND currency_paid = ? '
+              'AND invoice_id IN (SELECT id FROM invoices WHERE warehouse_id = ?)',
+          whereArgs: [
+            old['amount_minor'],
+            old['currency'],
+            old['warehouse_id'],
+          ],
+        );
+      }
+
       await txn.delete('transactions', where: 'id = ?', whereArgs: [id]);
     });
     onChanged();

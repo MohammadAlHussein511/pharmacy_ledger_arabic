@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
-import '../../domain/invoice_math.dart';
 import '../../services.dart';
 import 'invoice_detail_screen.dart';
 import 'invoice_form_screen.dart';
@@ -41,6 +40,8 @@ class _InvRow {
           : Colors.red;
 }
 
+String _money(int minor, String cur) => '${(minor / 100).toStringAsFixed(2)} $cur';
+
 class _InvoicesScreenState extends State<InvoicesScreen> {
   List<_InvRow> _rows = [];
   bool _loading = true;
@@ -63,15 +64,31 @@ class _InvoicesScreenState extends State<InvoicesScreen> {
 
       final rows = <_InvRow>[];
       for (final i in invs) {
+        final iid = i['id'] as int;
         final wid = i['warehouse_id'] as int;
-        final paid = await InvoiceMath.paidByInvoice(db, wid);
+        final invCur = i['currency'] as String;
+
+        final paidResult = await db.rawQuery('''
+          SELECT COALESCE(SUM(
+            CASE
+              WHEN currency_paid = ? THEN amount_minor
+              WHEN exchange_rate IS NOT NULL AND exchange_rate > 0
+                THEN CAST(ROUND(amount_minor * 1.0 / exchange_rate) AS INTEGER)
+              ELSE 0
+            END
+          ), 0) as paid
+          FROM invoice_payments
+          WHERE invoice_id = ?
+        ''', [invCur, iid]);
+        final paid = (paidResult.first['paid'] as num).toInt();
+
         rows.add(_InvRow(
-          id: i['id'] as int,
+          id: iid,
           warehouseId: wid,
           warehouseName: whNames[wid] ?? 'مستودع محذوف',
-          currency: i['currency'] as String,
+          currency: invCur,
           amountMinor: i['amount_minor'] as int,
-          paidMinor: paid[i['id'] as int] ?? 0,
+          paidMinor: paid,
           invoiceDate: i['invoice_date'] as String,
         ));
       }
@@ -81,7 +98,7 @@ class _InvoicesScreenState extends State<InvoicesScreen> {
         _rows = rows;
         _loading = false;
       });
-    } catch (_) {
+    } catch (e) {
       if (!mounted) return;
       setState(() => _loading = false);
     }
@@ -105,9 +122,6 @@ class _InvoicesScreenState extends State<InvoicesScreen> {
   Widget build(BuildContext context) {
     final t = Theme.of(context).textTheme;
     final totals = _totals;
-    final totalText = totals.isEmpty
-        ? 'لا يوجد ما علينا'
-        : totals.entries.map((e) => moneyText(e.value, e.key)).join(' + ');
     return Scaffold(
       body: _loading
           ? const Center(child: CircularProgressIndicator())
@@ -127,10 +141,26 @@ class _InvoicesScreenState extends State<InvoicesScreen> {
                               style: t.titleMedium?.copyWith(
                                   color: Theme.of(context).colorScheme.onPrimaryContainer)),
                           const SizedBox(height: 8),
-                          Text(totalText,
-                              style: t.headlineSmall?.copyWith(
-                                  color: Theme.of(context).colorScheme.onPrimaryContainer,
-                                  fontWeight: FontWeight.w700)),
+                          // [جديد] كل عملة في صف مستقل
+                          if (totals.isEmpty)
+                            Text('لا يوجد ما علينا',
+                                style: t.headlineSmall?.copyWith(
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .onPrimaryContainer,
+                                    fontWeight: FontWeight.w700))
+                          else
+                            for (final e in totals.entries)
+                              Padding(
+                                padding: const EdgeInsets.symmetric(vertical: 2),
+                                child: Text(_money(e.value, e.key),
+                                    style: t.headlineSmall?.copyWith(
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .onPrimaryContainer,
+                                        fontWeight: FontWeight.w700)),
+                              ),
+                          const SizedBox(height: 4),
                           Text('${_rows.length} فاتورة', style: t.bodySmall),
                         ],
                       ),
@@ -165,11 +195,11 @@ class _InvoicesScreenState extends State<InvoicesScreen> {
                             title: Text(r.warehouseName),
                             subtitle: Text(
                               '${r.invoiceDate} · ${r.status}\n'
-                              'المتبقي: ${moneyText(r.remaining, r.currency)}',
+                              'المتبقي: ${_money(r.remaining, r.currency)}',
                             ),
                             isThreeLine: true,
                             trailing: Text(
-                              moneyText(r.amountMinor, r.currency),
+                              _money(r.amountMinor, r.currency),
                               style: t.titleMedium?.copyWith(fontWeight: FontWeight.w700),
                             ),
                             onTap: () async {
